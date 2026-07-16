@@ -1,0 +1,17 @@
+# --- Segreti e dati sensibili (NON caricare su GitHub) ---
+.streamlit/secrets.toml
+.streamlit/
+.env
+*.env
+
+# --- Log e file temporanei ---
+login_errors.log
+*.log
+tmp_test.pdf
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# --- File di build/test locali ---
+tests/__pycache__/
