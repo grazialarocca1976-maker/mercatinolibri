@@ -189,7 +189,7 @@ def inserisci_qrcode_marconi(story):
     if os.path.exists(nome_qr):
         try:
             story.append(Spacer(1, 15))
-            story.append(Paragraph("<b>Scansiona il QRCode per accedere ai servizi online:</b>", styles['Normal']))
+            story.append(Paragraph("<b>Scansiona il QRCode per prenotare il reso libri/soldi:</b>", styles['Normal']))
             story.append(Spacer(1, 5))
             story.append(Image(nome_qr, width=70, height=70))
         except:

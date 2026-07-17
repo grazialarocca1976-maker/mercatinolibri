@@ -12,7 +12,14 @@ from reportlab.lib import colors
 # Importiamo la grafica centralizzata
 from ricevute_condivise import inserisci_intestazione_marconi, inserisci_anagrafica_cliente, list_receipts, build_public_storage_url
 
-st.set_page_config(page_title="Mercatino Libri Usati", layout="wide")
+st.set_page_config(page_title="Mercatino Libri Usati", layout="wide", initial_sidebar_state="expanded")
+
+# Disattiva la cache-busting UI di Streamlit (popup "Clear cache") e accelera i rerun
+try:
+    st.set_option("client.caching", False)
+    st.set_option("runner.fastReruns", True)
+except Exception:
+    pass
 
 # --- STILE GRAFICO (sfondo bianco, bottoni con icone) ---
 st.markdown("""
@@ -70,24 +77,37 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- SISTEMA DI LOGIN OPERATORE ---
+# Login persistente con auto-login basato su URL Query Parameters nativo (funziona sempre, anche al refresh!)
 if "logged_in" not in st.session_state:
-    st.session_state["logged_in"] = False
+    if "session" in st.query_params:
+        st.session_state["logged_in"] = True
+        st.session_state["operatore"] = st.query_params["session"]
+        st.session_state["pagina"] = "__HOME__"
+    else:
+        st.session_state["logged_in"] = False
 
 # Gestione della visualizzazione della pagina di Login
 if not st.session_state["logged_in"]:
     st.markdown("## 🔐 Accesso Operatore Marconi Verona")
     st.markdown("Inserisci le tue credenziali per accedere al sistema gestionale.")
-    
-    col_l1, col_l2 = st.columns(2)
-    with col_l1:
-        username = st.text_input("Nome Utente").strip()
-        password = st.text_input("Password", type="password").strip()
-        
+
+    # Usa gli input con chiave fissa per non perdere il focus ad ogni rerun
+    username = st.text_input("Nome Utente", key="login_user", value=st.session_state.get("login_user_tmp", "")).strip()
+    password = st.text_input("Password", type="password", key="login_pass").strip()
+    rimani = st.checkbox("🔒 Rimani collegato (salva sessione attiva sull'URL per non richiedere più il login)", value=True, key="rimani_collegato")
+
     if st.button("🔑 Accedi al Sistema", use_container_width=True):
         import gestione_operatori
         if gestione_operatori.autentica(username, password):
             st.session_state["logged_in"] = True
             st.session_state["operatore"] = username
+            st.session_state["login_user_tmp"] = username
+            # Se ha scelto di rimanere collegato, salviamo la sessione nei query_params URL del browser
+            if rimani:
+                st.query_params["session"] = username
+            # All'accesso andiamo alla Home con i 3 bottoni
+            st.session_state["pagina"] = "__HOME__"
+            st.session_state["flusso_iniziale"] = None
             st.success("🔓 Accesso consentito!")
             st.rerun()
         else:
@@ -127,11 +147,17 @@ PASSWORD_AMMINISTRATORE = st.secrets.get("password_admin", "Marconi2026")
 # Menu laterale con pulsanti grandi e leggibili (senza pallino) + icona per ciascuno
 st.sidebar.markdown("### 🧭 Navigazione")
 
-# Ogni voce ha la sua icona rappresentativa
+# Pulsante HOME: torna alla schermata con i 3 bottoni di scelta
+if st.sidebar.button("🏠 HOME (scelta operazione)", use_container_width=True, key="nav_home"):
+    st.session_state["pagina"] = "__HOME__"
+    st.session_state["flusso_iniziale"] = None
+    st.session_state["destinazione_dopo_cliente"] = None
+    st.rerun()
+
+# Voci del menu laterale: NON ripetiamo quelle già presenti nella Home
+# (Registrazione Clienti, Ritiro, Cassa sono raggiungibili dai 3 bottoni Home).
+# Qui mettiamo solo le funzioni "ALTRO" non coperte dalla Home.
 voci_nav = [
-    ("👤", "Registrazione Clienti"),
-    ("📥", "Ritiro Libri (Venditori)"),
-    ("🛒", "Cassa e Vendita Rapida"),
     ("📒", "Gestione Conti Cliente"),
     ("🔍", "🔍 Cerca Libro"),
     ("📁", " Archivio"),
@@ -140,7 +166,7 @@ voci_nav = [
 menu_options = [v[1] for v in voci_nav]
 
 if "pagina" not in st.session_state:
-    st.session_state["pagina"] = menu_options[0]
+    st.session_state["pagina"] = "__HOME__"
 
 for icona, opt in voci_nav:
     classe = ' data-active="true"' if st.session_state["pagina"] == opt else ""
@@ -151,12 +177,43 @@ for icona, opt in voci_nav:
     etichetta = f"{icona}  {opt.strip()}"
     if st.sidebar.button(etichetta, key=f"nav_{opt.replace(' ', '_')}", use_container_width=True):
         st.session_state["pagina"] = opt
+        # Se l'utente usa il menu completo, il flusso iniziale diventa "altro"
+        st.session_state["flusso_iniziale"] = "altro"
 
 menu = st.session_state["pagina"]
+
+# --- HOME: schermata principale con 3 bottoni (Vendita / Ritiro / Altro) ---
+if menu == "__HOME__":
+    st.markdown("## 🏠 Benvenuto nel Gestionale")
+    st.markdown("Scegli l'operazione da eseguire:")
+    hc1, hc2, hc3 = st.columns(3)
+    with hc1:
+        if st.button("🛒 VENDITA", use_container_width=True, key="home_vendita"):
+            # Flusso guidato: prima registra/cerca cliente, poi vai in cassa
+            st.session_state["flusso_iniziale"] = "vendita"
+            st.session_state["pagina"] = "Registrazione Clienti"
+            st.session_state["destinazione_dopo_cliente"] = "Cassa e Vendita Rapida"
+            st.rerun()
+    with hc2:
+        if st.button("📥 RITIRO", use_container_width=True, key="home_ritiro"):
+            # Flusso guidato: prima registra/cerca cliente, poi vai al ritiro
+            st.session_state["flusso_iniziale"] = "ritiro"
+            st.session_state["pagina"] = "Registrazione Clienti"
+            st.session_state["destinazione_dopo_cliente"] = "Ritiro Libri (Venditori)"
+            st.rerun()
+    with hc3:
+        if st.button("⚙️ ALTRO", use_container_width=True, key="home_altro"):
+            st.session_state["flusso_iniziale"] = "altro"
+            st.session_state["pagina"] = "Registrazione Clienti"
+            st.session_state["destinazione_dopo_cliente"] = None
+            st.rerun()
+    st.stop()
 
 # Logout button
 if st.sidebar.button("🚪 Logout", use_container_width=True):
     st.session_state["logged_in"] = False
+    if "session" in st.query_params:
+        del st.query_params["session"]
     st.rerun()
 
 st.sidebar.markdown("---")
@@ -416,6 +473,36 @@ if _is_admin():
                     use_container_width=True,
                     on_click=lambda: st.session_state.update({"ricevute_scaricate": True}),
                 )
+
+                # Anteprima riepilogo: quanto devi dare a ogni singolo utente
+                st.markdown("---")
+                st.subheader("💶 Quanta liquidazione spetta a ogni cliente")
+                righe_liq = []
+                for c in cli:
+                    libri_v = df_m[(df_m['id_venditore'] == c['id']) & (df_m['stato'] == 'venduto')]
+                    libri_r = df_m[(df_m['id_venditore'] == c['id']) & (df_m['stato'] == 'disponibile')]
+                    if libri_v.empty and libri_r.empty:
+                        continue
+                    da_liq = libri_v['Prezzo Liquidazione'].sum() if not libri_v.empty else 0.0
+                    # 'Prezzo Liquidazione' è già 50% - 0,50 € a libro: i 0,50 € sono il
+                    # rimborso spese di gestione trattenuto dal negozio (voce a sé stante), NON vanno ri-sommati.
+                    rimborso_spese = len(libri_v) * 0.50
+                    tot_dare = da_liq
+                    righe_liq.append({
+                        "Codice": c.get('codice_personale', ''),
+                        "Cliente": f"{c.get('cognome','')} {c.get('nome','')}",
+                        "Libri venduti": len(libri_v),
+                        "Rimborso Spese Gest. (€)": round(rimborso_spese, 2),
+                        "Liquidazione (€)": round(da_liq, 2),
+                        "TOTALE DA DARE (€)": round(tot_dare, 2),
+                        "Libri da restituire": len(libri_r),
+                    })
+                if righe_liq:
+                    df_liq = pd.DataFrame(righe_liq)
+                    st.dataframe(df_liq, use_container_width=True, hide_index=True)
+                    st.caption("💡 'Liquidazione' = 50% del prezzo di copertina MENO 0,50 € di rimborso spese di gestione a libro. 'TOTALE DA DARE' è la somma delle liquidazioni. I 0,50 €/libro sono il rimborso spese trattenuto dal negozio (voce a sé stante). I libri da restituire sono quelli non venduti da ridare al cliente.")
+                else:
+                    st.info("Nessun cliente con libri da liquidare/restituire.")
             else:
                 st.info("Nessun dato da liquidare nei report.")
 

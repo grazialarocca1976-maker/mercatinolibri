@@ -17,20 +17,26 @@ HEADERS = {
 
 def mostra_pagina():
     st.header("👤 Gestione Anagrafica Clienti")
-    
+
+    # Flusso guidato da Home (VENDITA/RITIRO): dopo aver registrato/cercato il cliente,
+    # si viene rimandati automaticamente alla pagina di destinazione (cassa o ritiro).
+    destinazione = st.session_state.get("destinazione_dopo_cliente", None)
+    if destinazione:
+        st.info(f"🔄 Flusso **{'VENDITA' if destinazione.startswith('Cassa') else 'RITIRO'}**: registra o cerca il cliente, poi procederai automaticamente a **{destinazione}**.")
+
     # Carichiamo l'elenco clienti una sola volta (serve sia per Modifica che per il tabellone)
     res_c = requests.get(f"{URL_REST}/clienti?select=*&order=id.asc", headers=HEADERS)
     clienti_list = res_c.json() if res_c.status_code == 200 else []
-    
-    tab_registra, tab_modifica = st.tabs(["➕ Registra Nuovo Cliente", "✏️ Modifica o Elimina Cliente"])
-    
+
+    tab_registra, tab_cerca, tab_modifica = st.tabs(["➕ Registra Nuovo Cliente", "🔍 Cerca Cliente Esistente", "✏️ Modifica o Elimina Cliente"])
+
     # --- 1. SCHERMATA REGISTRAZIONE CON CONTROLLO DOPPIONI ---
     with tab_registra:
         st.subheader("Inserisci un nuovo cliente")
-        
+
         if "lettere_casuali_correnti" not in st.session_state:
             st.session_state["lettere_casuali_correnti"] = ''.join(random.choices(string.ascii_uppercase, k=2))
-            
+
         col1, col2 = st.columns(2)
         with col1:
             nome = st.text_input("Nome", key="ins_nome").strip()
@@ -38,7 +44,7 @@ def mostra_pagina():
         with col2:
             telefono = st.text_input("Numero di Telefono", key="ins_tel").strip()
             email = st.text_input("Indirizzo Email", key="ins_email").strip().lower()
-        
+
         st.write("")
         if st.button("💾 Salva Nuovo Cliente"):
             if nome and cognome and telefono and email:
@@ -53,13 +59,13 @@ def mostra_pagina():
                             st.error(f"❌ Errore: Il numero di telefono **{telefono}** è già associato al cliente: **{c['id']} - {c['cognome']} {c['nome']}**.")
                             doppione_trovato = True
                             break
-                        
+
                         # 2. Controllo sull'email (se inserita)
                         if email and c.get('email', '').strip().lower() == email:
                             st.error(f"❌ Errore: L'indirizzo email **{email}** è già associato al cliente: **{c['id']} - {c['cognome']} {c['nome']}**.")
                             doppione_trovato = True
                             break
-                    
+
                     if not doppione_trovato:
                         # Calcola il codice personale dinamico (stesse regole di prima)
                         testo_base = f"{cognome}{nome}XXX".upper()
@@ -90,32 +96,73 @@ def mostra_pagina():
                             st.success(f"🎉 Cliente {nome} {cognome} registrato con successo! Codice cliente: {codice_finale}")
                             if "lettere_casuali_correnti" in st.session_state:
                                 del st.session_state["lettere_casuali_correnti"]
+                            # Se arriviamo dal flusso guidato, imposta il cliente e vai alla destinazione
+                            if st.session_state.get("destinazione_dopo_cliente"):
+                                st.session_state["id_venditore_corrente"] = int(res.json()[0]["id"]) if res.json() else None
+                                st.session_state["id_acquirente_corrente"] = int(res.json()[0]["id"]) if res.json() else None
+                                st.session_state["pagina"] = st.session_state["destinazione_dopo_cliente"]
+                                st.session_state["destinazione_dopo_cliente"] = None
                             st.rerun()
                         else:
                             st.error("Errore nel salvataggio online. Il codice generato potrebbe essere un doppione raro, riprova.")
             else:
                 st.warning("⚠️ I campi Nome, Cognome, Numero di Telefono e Indirizzo Email sono tutti obbligatori.")
 
+    # --- 1B. SCHERMATA CERCA CLIENTE ESISTENTE (flusso guidato VENDITA/RITIRO) ---
+    with tab_cerca:
+        st.subheader("🔍 Cerca un cliente già registrato")
+        if not clienti_list:
+            st.info("Nessun cliente registrato nel database.")
+        else:
+            # Filtro di ricerca libero (nome, cognome, telefono, email, codice)
+            filtro = st.text_input("Scrivi Nome, Cognome, Telefono, Email o Codice cliente", key="cerca_cliente_testo").strip().lower()
+            risultati = clienti_list
+            if filtro:
+                risultati = [
+                    c for c in clienti_list
+                    if filtro in (c.get('nome', '') + ' ' + c.get('cognome', '')).lower()
+                    or filtro in str(c.get('telefono', '')).lower()
+                    or filtro in (c.get('email', '') or '').lower()
+                    or filtro in (c.get('codice_personale', '') or '').lower()
+                ]
+            if not risultati:
+                st.info("Nessun cliente corrisponde alla ricerca.")
+            else:
+                mappa_cerca = {f"{c['id']} - {c['cognome']} {c['nome']} ({c['codice_personale']})": c for c in risultati}
+                scelta_cerca = st.selectbox("Seleziona il cliente trovato", list(mappa_cerca.keys()), key="sel_cliente_cerca")
+                cliente_trovato = mappa_cerca[scelta_cerca]
+                st.success(f"✅ Cliente selezionato: **{cliente_trovato['cognome']} {cliente_trovato['nome']}** (Codice: {cliente_trovato['codice_personale']})")
+                if st.button("➡️ VAI A VENDITA / RITIRO CON QUESTO CLIENTE", use_container_width=True):
+                    cid = int(cliente_trovato['id'])
+                    # Imposta il cliente come venditore e/o acquirente a seconda della destinazione
+                    if st.session_state.get("destinazione_dopo_cliente", "").startswith("Cassa"):
+                        st.session_state["id_acquirente_corrente"] = cid
+                    else:
+                        st.session_state["id_venditore_corrente"] = cid
+                    st.session_state["pagina"] = st.session_state["destinazione_dopo_cliente"]
+                    st.session_state["destinazione_dopo_cliente"] = None
+                    st.rerun()
+
     # --- 2. SCHERMATA MODIFICA E VARIAZIONE ---
     with tab_modifica:
         st.subheader("Varia i dati o cancella un utente")
-        
+
         if not clienti_list:
             st.info("Nessun cliente registrato nel database.")
         else:
             mappa_clienti = {f"{c['id']} - {c['cognome']} {c['nome']} ({c['codice_personale']})": c for c in clienti_list}
             scelta = st.selectbox("Seleziona il cliente su cui lavorare", list(mappa_clienti.keys()))
             cliente_selezionato = mappa_clienti[scelta]
-            
+
             st.write("---")
             st.text_input("Numero Progressivo assegnato (ID)", value=str(cliente_selezionato['id']), disabled=True)
             st.text_input("Codice Personale (Bloccato di sicurezza)", value=cliente_selezionato['codice_personale'], disabled=True)
-            
+
             mod_nome = st.text_input("Varia Nome", value=cliente_selezionato['nome'])
             mod_cognome = st.text_input("Varia Cognome", value=cliente_selezionato['cognome'])
             mod_tel = st.text_input("Varia Telefono", value=cliente_selezionato['telefono'] or "")
             mod_email = st.text_input("Varia Email", value=cliente_selezionato.get('email', '') or "").strip().lower()
-            
+
             col_btn1, col_btn2 = st.columns(2)
             with col_btn1:
                 if st.button("🔄 Aggiorna Dati Anagrafici"):
@@ -132,11 +179,11 @@ def mostra_pagina():
                                     st.error(f"❌ Impossibile aggiornare: L'email è già usata da un altro cliente (ID: {c['id']}).")
                                     doppione_mod = True
                                     break
-                        
+
                         if not doppione_mod:
                             dati_up = {
-                                "nome": mod_nome.strip(), 
-                                "cognome": mod_cognome.strip(), 
+                                "nome": mod_nome.strip(),
+                                "cognome": mod_cognome.strip(),
                                 "telefono": mod_tel.strip(),
                                 "email": mod_email
                             }
@@ -147,7 +194,7 @@ def mostra_pagina():
                                 st.rerun()
                             else:
                                 st.error("Modifica rifiutata dal server.")
-                        
+
             with col_btn2:
                 if st.button("❌ Elimina Cliente Definitivamente"):
                     url_del = f"{URL_REST}/clienti?id=eq.{cliente_selezionato['id']}"

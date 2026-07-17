@@ -28,11 +28,13 @@ def prepara_dati_etichette(lista_libri):
         if id_val is None:
             id_val = libro.get("id")
         if id_val is None:
-            etichetta = libro.get("etichetta") or ""
-            if etichetta:
-                parte_id = str(etichetta).split("-")[0].strip()
-                if parte_id.isdigit():
-                    id_val = int(parte_id)
+                etichetta = libro.get("etichetta") or ""
+                if etichetta:
+                    # Formato ufficiale: <codice_personale>-<id_libro> (id_libro alla FINE, numerico)
+                    parti = [p.strip() for p in str(etichetta).split("-") if p.strip()]
+                    parte_id = parti[-1] if parti else ""
+                    if parte_id.isdigit():
+                        id_val = int(parte_id)
         if id_val is None:
             continue
 
@@ -101,8 +103,9 @@ def stampa_etichette_tm_l90(lista_libri):
     return True
 
 
-def genera_griglia_a4_bytes(lista_libri, layout=None):
-    """Genera un PDF in memoria (bytes) per download invece di scrivere sul file system."""
+def genera_griglia_a4_bytes(lista_libri, layout=None, start_index=0):
+    """Genera un PDF in memoria (bytes) per download invece di scrivere sul file system.
+    Supporta start_index per saltare le prime etichette già usate sul foglio."""
     libri_normalizzati = prepara_dati_etichette(lista_libri)
     if not libri_normalizzati:
         return None
@@ -119,6 +122,9 @@ def genera_griglia_a4_bytes(lista_libri, layout=None):
     elif isinstance(layout, str):
         if layout.lower() == "a5":
             layout = {"larghezza_etichetta_mm": 90, "altezza_etichetta_mm": 50, "margine_sinistro_mm": 5, "margine_superiore_mm": 10, "colonne": 2, "righe": 4}
+        elif layout.lower() == "10":
+            # Layout per 10 etichette: 2 colonne x 5 righe
+            layout = {"larghezza_etichetta_mm": 70, "altezza_etichetta_mm": 36, "margine_sinistro_mm": 0, "margine_superiore_mm": 11, "colonne": 2, "righe": 5}
         else:
             layout = {"larghezza_etichetta_mm": 70, "altezza_etichetta_mm": 36, "margine_sinistro_mm": 0, "margine_superiore_mm": 11, "colonne": 3, "righe": 8}
 
@@ -134,8 +140,8 @@ def genera_griglia_a4_bytes(lista_libri, layout=None):
         c = canvas.Canvas(buffer, pagesize=A4)
         largheza_pagina, altezza_pagina = A4
 
-        colonna_attuale = 0
-        riga_attuale = 0
+        colonna_attuale = start_index % COLONNE
+        riga_attuale = (start_index // COLONNE) % RIGHE
 
         for libro in libri_normalizzati:
             id_libro = libro['id']
@@ -160,8 +166,22 @@ def genera_griglia_a4_bytes(lista_libri, layout=None):
             barcode = code128.Code128(barcode_value, barWidth=0.25 * mm, barHeight=10 * mm)
             barcode.drawOn(c, x + 4 * mm, barcode_y)
 
-            c.setFont("Helvetica", 6)
-            c.drawString(x + 4 * mm, y + inner_padding + 1 * mm, f"ID: {id_libro}  {barcode_value}")
+            # ID grande e in grassetto per essere ben visibile
+            c.setFont("Helvetica-Bold", 12)
+            c.drawString(x + 4 * mm, y + inner_padding + 1 * mm, f"ID: {id_libro}")
+
+            # Codice: la parte finale (es. -31, lo scannable) in grassetto
+            parti_codice = str(barcode_value).rsplit("-", 1)
+            if len(parti_codice) == 2:
+                prefisso, finale = parti_codice
+                c.setFont("Helvetica", 7)
+                c.drawString(x + 4 * mm, y + 1 * mm, prefisso + "-")
+                larg_prefisso = c.stringWidth(prefisso + "-", "Helvetica", 7)
+                c.setFont("Helvetica-Bold", 7)
+                c.drawString(x + 4 * mm + larg_prefisso, y + 1 * mm, finale)
+            else:
+                c.setFont("Helvetica-Bold", 7)
+                c.drawString(x + 4 * mm, y + 1 * mm, str(barcode_value))
 
             colonna_attuale += 1
             if colonna_attuale >= COLONNE:
@@ -196,8 +216,8 @@ def genera_preview_etichette(lista_libri):
     return righe
 
 
-def genera_griglia_a4(lista_libri, file_output="etichette_a4_marconi.pdf", stampa=True, layout=None):
-    """Genera un PDF formattato al millimetro per fogli A4 adesivi. Supporta layout standard e personalizzati."""
+def genera_griglia_a4(lista_libri, file_output="etichette_a4_marconi.pdf", stampa=True, layout=None, start_index=0):
+    """Genera un PDF formattato al millimetro per fogli A4 adesivi. Supporta layout standard, personalizzati e start_index."""
     libri_normalizzati = prepara_dati_etichette(lista_libri)
     if not libri_normalizzati:
         return False
@@ -238,8 +258,8 @@ def genera_griglia_a4(lista_libri, file_output="etichette_a4_marconi.pdf", stamp
             c = canvas.Canvas(str(candidate), pagesize=A4)
             largheza_pagina, altezza_pagina = A4
 
-            colonna_attuale = 0
-            riga_attuale = 0
+            colonna_attuale = start_index % COLONNE
+            riga_attuale = (start_index // COLONNE) % RIGHE
 
             for libro in libri_normalizzati:
                 id_libro = libro['id']
@@ -257,9 +277,22 @@ def genera_griglia_a4(lista_libri, file_output="etichette_a4_marconi.pdf", stamp
                 barcode = code128.Code128(barcode_value, barWidth=0.28 * mm, barHeight=12 * mm)
                 barcode.drawOn(c, x + 5 * mm, y + 6 * mm)
 
-                c.setFont("Helvetica", 7)
+                # ID grande e in grassetto per essere ben visibile
+                c.setFont("Helvetica-Bold", 12)
                 c.drawString(x + 5 * mm, y + 2 * mm, f"ID: {id_libro}")
-                c.drawString(x + 5 * mm, y + 1 * mm, barcode_value)
+
+                # Codice: la parte finale (es. -31, lo scannable) in grassetto
+                parti_codice = str(barcode_value).rsplit("-", 1)
+                if len(parti_codice) == 2:
+                    prefisso, finale = parti_codice
+                    c.setFont("Helvetica", 7)
+                    c.drawString(x + 5 * mm, y + 1 * mm, prefisso + "-")
+                    larg_prefisso = c.stringWidth(prefisso + "-", "Helvetica", 7)
+                    c.setFont("Helvetica-Bold", 7)
+                    c.drawString(x + 5 * mm + larg_prefisso, y + 1 * mm, finale)
+                else:
+                    c.setFont("Helvetica-Bold", 7)
+                    c.drawString(x + 5 * mm, y + 1 * mm, str(barcode_value))
 
                 colonna_attuale += 1
                 if colonna_attuale >= COLONNE:

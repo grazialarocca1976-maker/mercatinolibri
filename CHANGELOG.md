@@ -4,7 +4,20 @@
 
 Tutte le modifiche significative al progetto vengono documentate in questo file.
 
-## 2026-07-17 (oggi)
+## 2026-07-17 (oggi) — v1.1.0
+
+### Barcode, numerazione ricevute ed etichette
+- **Fix lettura barcode (apostrofo)**: lo scanner leggeva `BOR85RW0001'31` (apostrofo al posto del trattino). Ora il parser normalizza qualsiasi separatore non alfanumerico in `-` (`cassa.py`), cosi `BOR85RW0001-31` → estrae correttamente l'id_libro `31`.
+- **Barcode ritiro numerico e corto**: generazione etichetta/barcode nel formato `<id_venditore>-<id_libro>` (es. `123-31`) invece di `<codice_personale>-<id_libro>` (`ritiro.py`), per una scansione piu affidabile (niente lettere da leggere).
+- **Numero ricevuta progressivo per tipo**: le ricevute ora riportano un numero progressivo dedicato — `N/V` per le vendite e `N/R` per i ritiri (es. `1/V`, `2/V`, `1/R`…) — calcolato su DB (`crea_tabella_ricevute.sql` arricchito con le colonne `tipo` e `numero_progressivo`).
+- **Numero ricevuta in alto a destra, grande**: su entrambe le ricevute (vendita e ritiro) il numero appare in basso stile Title, allineato a destra; sotto, in piccolo grigio, **Data e Ora** della transazione.
+- **Etichette A4**: `ID: <numero>` mostrato grande e in grassetto; la parte scannabile del codice (es. `-31`) in grassetto, il prefisso in normale (`gestore_etichette.py`).
+- **Clausola ritiro**: didascalia QRCode aggiornata in `"Scansiona il QRCode per prenotare il reso libri/soldi:"` (`ricevute_condivise.py`).
+
+### Scorporo rimborso spese e Etichette antispreco
+- **Scorporo 50 centesimi**: I 50 centesimi di rimborso spese non vengono più inclusi nel prezzo di vendita del singolo libro sulla ricevuta. Sono ora calcolati e mostrati chiaramente come riga separata `"RIMBORSO SPESE"` in fondo alla ricevuta PDF, completata dalla riga del `"TOTALE COMPLESSIVO RICEVUTO"` (in `cassa.py`).
+- **Riepilogo in Cassa trasparente**: La schermata di cassa a monitor mostra adesso tre metriche chiare e distinte per trasparenza: `"TOTALE SOLO LIBRI"`, `"RIMBORSO SPESE GESTIONE"` e `"TOTALE COMPLESSIVO PAGATO"`.
+- **Etichette A4 Antispreco**: Aggiunta la funzionalità di **stampa con offset (posizione di partenza)** in `gestore_etichette.py` e `ritiro.py`. Consente all'operatore di selezionare da quale etichetta far partire la stampa (es. inserendo 11 se le prime 10 sono già state usate e staccate), evitando di sprecare e dover gettare i fogli adesivi A4 parzialmente utilizzati.
 
 ### Log errori centralizzato (online)
 - Sostituito il file locale `login_errors.log` (scritto sui PC degli utenti) con un **logger centralizzato su Supabase** (`logger_supabase.py` → tabella `log_errori`).

@@ -56,14 +56,16 @@ def genera_resoconto_fine_anno():
         elif "bancomat" in metodo:
             tot_bancomat += prezzo_vendita
 
-    # Liquidazioni per cliente (solo chi ha venduto)
+    # Liquidazioni per cliente (chi ha venduto E chi ha libri da restituire)
     liquidazioni = []
     for cl in clienti:
-        libri_cl = [c for c in venduti if c.get("id_venditore") == cl.get("id")]
-        if libri_cl:
+        id_cl = cl.get("id")
+        libri_venduti_cl = [c for c in venduti if c.get("id_venditore") == id_cl]
+        libri_da_restituire_cl = [c for c in copie if c.get("id_venditore") == id_cl and c.get("stato") == "disponibile"]
+        if libri_venduti_cl or libri_da_restituire_cl:
             da_liquidare = 0.0
-            dettaglio = []
-            for c in libri_cl:
+            dettaglio_venduti = []
+            for c in libri_venduti_cl:
                 prezzo_base = float(c.get("prezzo_inserito_mano", 0.0) or 0.0)
                 if prezzo_base == 0.0:
                     isbn = c.get("isbn")
@@ -71,19 +73,40 @@ def genera_resoconto_fine_anno():
                     prezzo_base = float(pc or 0.0)
                 liq = (prezzo_base / 2) - 0.50
                 da_liquidare += liq
-                dettaglio.append({
+                dettaglio_venduti.append({
                     "id_libro": c.get("id_libro"),
                     "isbn": c.get("isbn"),
                     "prezzo_liquidazione": round(liq, 2),
                     "data_vendita": c.get("data_vendita"),
                 })
+            # Rimborso spese: 0,50 € per ogni libro venduto (come in cassa)
+            rimborso_spese = len(libri_venduti_cl) * 0.50
+            # Libri da restituire (non venduti)
+            dettaglio_restituiti = []
+            for c in libri_da_restituire_cl:
+                isbn = c.get("isbn")
+                titolo = next((x.get("titolo", "") for x in catalogo if x.get("isbn") == isbn), "")
+                prezzo_base = float(c.get("prezzo_inserito_mano", 0.0) or 0.0)
+                if prezzo_base == 0.0:
+                    pc = next((x.get("prezzo_copertina", 0.0) for x in catalogo if x.get("isbn") == isbn), 0.0)
+                    prezzo_base = float(pc or 0.0)
+                dettaglio_restituiti.append({
+                    "id_libro": c.get("id_libro"),
+                    "isbn": c.get("isbn"),
+                    "titolo": titolo,
+                    "prezzo_base": round(prezzo_base, 2),
+                })
             liquidazioni.append({
-                "id_cliente": cl.get("id"),
+                "id_cliente": id_cl,
                 "codice_personale": cl.get("codice_personale"),
                 "nome": cl.get("nome"),
                 "cognome": cl.get("cognome"),
+                "n_libri_venduti": len(libri_venduti_cl),
+                "rimborso_spese": round(rimborso_spese, 2),
                 "totale_da_liquidare": round(da_liquidare, 2),
-                "libri": dettaglio,
+                "totale_da_dare_cliente": round(da_liquidare + rimborso_spese, 2),
+                "libri_venduti": dettaglio_venduti,
+                "libri_da_restituire": dettaglio_restituiti,
             })
 
     resoconto = {
