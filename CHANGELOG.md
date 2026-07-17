@@ -4,7 +4,7 @@
 
 Tutte le modifiche significative al progetto vengono documentate in questo file.
 
-## 2026-07-17 (oggi) — v1.1.0
+## 2026-07-17 (oggi) — v2.0.0
 
 ### Barcode, numerazione ricevute ed etichette
 - **Fix lettura barcode (apostrofo)**: lo scanner leggeva `BOR85RW0001'31` (apostrofo al posto del trattino). Ora il parser normalizza qualsiasi separatore non alfanumerico in `-` (`cassa.py`), cosi `BOR85RW0001-31` → estrae correttamente l'id_libro `31`.
