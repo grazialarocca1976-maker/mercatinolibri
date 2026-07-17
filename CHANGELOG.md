@@ -13,6 +13,7 @@ Tutte le modifiche significative al progetto vengono documentate in questo file.
 - **Numero ricevuta in alto a destra, grande**: su entrambe le ricevute (vendita e ritiro) il numero appare in basso stile Title, allineato a destra; sotto, in piccolo grigio, **Data e Ora** della transazione.
 - **Etichette A4**: `ID: <numero>` mostrato grande e in grassetto; la parte scannabile del codice (es. `-31`) in grassetto, il prefisso in normale (`gestore_etichette.py`).
 - **Clausola ritiro**: didascalia QRCode aggiornata in `"Scansiona il QRCode per prenotare il reso libri/soldi:"` (`ricevute_condivise.py`).
+- **Reset contatore ricevute a fine anno**: il pulsante "Reset Database" (`app.py`) ora svuota anche la tabella `ricevute` quando si azzerano copie/catalogo. Lo storico delle ricevute resta preservato nel resoconto JSON di fine anno e nei singoli PDF gia' caricati su Supabase Storage (bucket `ricevute`), cosi il numero riparte pulito da `1/V`, `1/R` ogni anno senza perdere nulla.
 
 ### Scorporo rimborso spese e Etichette antispreco
 - **Scorporo 50 centesimi**: I 50 centesimi di rimborso spese non vengono più inclusi nel prezzo di vendita del singolo libro sulla ricevuta. Sono ora calcolati e mostrati chiaramente come riga separata `"RIMBORSO SPESE"` in fondo alla ricevuta PDF, completata dalla riga del `"TOTALE COMPLESSIVO RICEVUTO"` (in `cassa.py`).

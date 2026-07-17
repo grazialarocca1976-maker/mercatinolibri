@@ -548,7 +548,13 @@ if _is_admin():
                 chk_r = st.checkbox("Confermo: voglio cancellare il magazzino copie usate")
                 if chk_r and st.button("🚨 ESEGUI CANCELLAZIONE COPIE FISICHE"):
                     requests.delete(f"{URL_REST}/copie_libri?id_libro=gt.0", headers=HEADERS)
-                    st.success("🧼 Magazzino copie svuotato con successo!")
+                    # Azzeramento contatore ricevute: lo storico resta nel JSON di fine anno
+                    # e nei PDF gia' caricati su Storage, ma il numero riparte da 1/V, 1/R.
+                    try:
+                        requests.delete(f"{URL_REST}/ricevute?id=gt.0", headers=HEADERS)
+                    except Exception:
+                        pass
+                    st.success("🧼 Magazzino copie svuotato e contatore ricevute azzerato!")
                     st.session_state["ricevute_scaricate"] = False
                     st.session_state["resoconto_scaricato"] = False
                     st.rerun()
@@ -558,7 +564,12 @@ if _is_admin():
                 if chk_l and st.button("🚨 CANCELLA CATALOGO LIBRI ADOZIONI"):
                     requests.delete(f"{URL_REST}/copie_libri?id_libro=gt.0", headers=HEADERS)
                     requests.delete(f"{URL_REST}/catalogo_libri?isbn=not.is.null", headers=HEADERS)
-                    st.success("🧼 Catalogo libri svuotato!")
+                    # Azzeramento contatore ricevute (storico preservato su JSON + Storage)
+                    try:
+                        requests.delete(f"{URL_REST}/ricevute?id=gt.0", headers=HEADERS)
+                    except Exception:
+                        pass
+                    st.success("🧼 Catalogo libri svuotato e contatore ricevute azzerato!")
                     st.session_state["ricevute_scaricate"] = False
                     st.session_state["resoconto_scaricato"] = False
                     st.rerun()
