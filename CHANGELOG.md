@@ -4,7 +4,7 @@
 
 Tutte le modifiche significative al progetto vengono documentate in questo file.
 
-## 2026-07-19 (oggi)
+## 2026-07-19 — v2.1.0 (Versione Corrente)
 
 ### Interfaccia e navigazione
 - **Pulsante MENU solo con barra laterale chiusa**: il controllo nativo di Streamlit che riapre la sidebar viene ora mostrato come pulsante `☰ MENU`, posizionato in alto a sinistra e visibile solo quando la barra laterale è collassata (`app.py`, CSS `collapsedControl` / `stSidebarCollapsedControl`). Rimosso il vecchio tentativo di gestire lo stato della sidebar via `session_state`, non sincronizzabile con il click nativo di Streamlit.
@@ -37,7 +37,7 @@ Tutte le modifiche significative al progetto vengono documentate in questo file.
   - `test_logger_supabase.py` (6): `log_errore` (payload, troncamento campi, non-sollevazione) e `leggi_log_errori` con `requests` mockato.
 - **Fix `prepara_dati_etichette`**: estrazione dell'id dall'etichetta ora cerca l'**ultima parte numerica** tra tutte le parti separate da `-`, gestendo sia il formato `<id_libro> - <codice>` che `<codice> - <id_libro>` (prima falliva con `IndexError` su etichette tipo `"27 - ABC"`).
 
-## 2026-07-17 (oggi) — v2.0.0
+## 2026-07-17 — v2.0.0
 
 ### Barcode, numerazione ricevute ed etichette
 - **Fix lettura barcode (apostrofo)**: lo scanner leggeva `BOR85RW0001'31` (apostrofo al posto del trattino). Ora il parser normalizza qualsiasi separatore non alfanumerico in `-` (`cassa.py`), cosi `BOR85RW0001-31` → estrae correttamente l'id_libro `31`.
@@ -63,7 +63,7 @@ Tutte le modifiche significative al progetto vengono documentate in questo file.
 - I tentativi di login falliti vengono ora registrati online (tipo, messaggio, dettaglio, operatore, pagina).
 - Aggiunta la voce **"📜 Log Errori"** nell'Area Admin: mostra la tabella degli errori (Data/Ora, Tipo, Messaggio, Dettaglio, Operatore, Pagina) letta da Supabase, visibile ovunque tu sia, non sui singoli PC.
 
-## 2026-07-16 (ieri)
+## 2026-07-16 — v1.1.0
 
 ### Interfaccia e navigazione
 - Sfondo bianco e stile grafico centralizzato (header operatore sempre visibile in alto).
@@ -101,7 +101,7 @@ Tutte le modifiche significative al progetto vengono documentate in questo file.
 - Password admin e master spostate da hardcoded a `.streamlit/secrets.toml` (`password_admin`, `password_master`), lette via `st.secrets`.
 - Creato `.gitignore` che esclude `secrets.toml`, log e file temporanei dal repository.
 
-## 2026-07-15 (ieri)
+## 2026-07-15 — v1.0.0 (Versione Iniziale)
 - Struttura iniziale del gestionale con login operatori e tabella `operatori` su Supabase.
 - Pagine: Registrazione Clienti, Ritiro Libri, Cassa, Gestione Conti, Cerca Libro, Archivio.
 - Generazione ricevute PDF (A4 + etichette termiche TM-L90) e pubblicazione su Storage Supabase.
