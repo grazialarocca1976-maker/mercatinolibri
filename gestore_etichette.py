@@ -30,11 +30,12 @@ def prepara_dati_etichette(lista_libri):
         if id_val is None:
                 etichetta = libro.get("etichetta") or ""
                 if etichetta:
-                    # Formato ufficiale: <codice_personale>-<id_libro> (id_libro alla FINE, numerico)
+                    # Cerca l'ultima parte numerica tra le parti separate da "-"
+                    # Gestisce sia "<id_libro> - <codice>" che "<codice> - <id_libro>"
                     parti = [p.strip() for p in str(etichetta).split("-") if p.strip()]
-                    parte_id = parti[-1] if parti else ""
-                    if parte_id.isdigit():
-                        id_val = int(parte_id)
+                    parti_numeriche = [p for p in parti if p.isdigit()]
+                    if parti_numeriche:
+                        id_val = int(parti_numeriche[-1])
         if id_val is None:
             continue
 

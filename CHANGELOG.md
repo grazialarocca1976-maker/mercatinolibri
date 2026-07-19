@@ -27,6 +27,16 @@ Tutte le modifiche significative al progetto vengono documentate in questo file.
 ### Resoconti / Reset
 - **Cancella tutti i clienti (dati di prova)**: nuovo pulsante (con spunta di conferma) nella pagina "Resoconti Finanziari e Reset di Fine Anno" che elimina TUTTI i clienti e i dati collegati (`copie_libri`, `ricevute`, `clienti`), utile per rimuovere i dati di test. Gli account `operatori` non vengono toccati (`report .py`).
 
+### Test automatici (pytest)
+- **Suite test estesa a 51 test (tutti verdi)**: aggiunti 6 nuovi file di test in `tests/` per coprire le funzioni pure/isolabili dei moduli:
+  - `test_ricevute_condivise.py` (10): `_sanifica_testo`, `build_receipt_storage_path`, `build_public_storage_url`.
+  - `test_gestione_operatori.py` (16): `_hash_password`/`verifica_password` e `crea_operatore`/`elimina_operatore`/`cambia_ruolo`/`lista_operatori`/`autentica` con `requests` mockato.
+  - `test_gestore_etichette_pdf.py` (5): `genera_preview_etichette` e `genera_griglia_a4_bytes` (verifica PDF bytes validi, incluso layout "a5").
+  - `test_export_fine_anno.py` (3): `genera_resoconto_fine_anno` con `_get` mockato (struttura JSON, calcoli cassa, liquidazioni per cliente).
+  - `test_cassa_pdf.py` (4): `genera_pdf_vendita_multipla` e `genera_pdf_chiusura_giornaliera` (verifica PDF bytes validi).
+  - `test_logger_supabase.py` (6): `log_errore` (payload, troncamento campi, non-sollevazione) e `leggi_log_errori` con `requests` mockato.
+- **Fix `prepara_dati_etichette`**: estrazione dell'id dall'etichetta ora cerca l'**ultima parte numerica** tra tutte le parti separate da `-`, gestendo sia il formato `<id_libro> - <codice>` che `<codice> - <id_libro>` (prima falliva con `IndexError` su etichette tipo `"27 - ABC"`).
+
 ## 2026-07-17 (oggi) — v2.0.0
 
 ### Barcode, numerazione ricevute ed etichette
