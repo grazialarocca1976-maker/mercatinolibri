@@ -171,12 +171,17 @@ def payload_storno_ritiro():
     return {"stato": "disponibile"}
 
 
-def _rigenera_ricevuta_ritiro_completa(cliente_full, libri_cliente):
+def _rigenera_ricevuta_ritiro_completa(cliente_full, libri_cliente, includi_id_libro=None):
     """Rigenera la ricevuta di ritiro COMPLETA del cliente con i prezzi aggiornati.
     Usa tutti i libri ancora 'disponibile' (ritirati ma non venduti) del cliente,
-    cosi la ricevuta viene ristampata per intero e non solo per il singolo libro corretto."""
+    cosi la ricevuta viene ristampata per intero. Se si passa 'includi_id_libro',
+    quel libro viene incluso nella ricevuta anche se non è in stato 'disponibile'
+    (es. è già 'venduto'), così la correzione prezzo rigenera la ricevuta giusta."""
     from ritiro import genera_pdf_ricevuta
-    disponibili = libri_cliente[libri_cliente['stato'] == 'disponibile']
+    maschera = libri_cliente['stato'] == 'disponibile'
+    if includi_id_libro is not None:
+        maschera = maschera | (libri_cliente['id_libro'] == includi_id_libro)
+    disponibili = libri_cliente[maschera]
     if disponibili.empty:
         return None
     libri_ritirati = []
@@ -188,6 +193,28 @@ def _rigenera_ricevuta_ritiro_completa(cliente_full, libri_cliente):
             "prezzo": float(r.get('prezzo_inserito_mano', 0.0) or r.get('prezzo_copertina', 0.0)),
         })
     return genera_pdf_ricevuta(cliente_full, libri_ritirati)
+
+
+def _rigenera_ricevuta_vendita(cliente_full, riga_mod, nuovo_prezzo):
+    """Rigenera la ricevuta di VENDITA per un singolo libro già venduto, con il prezzo aggiornato.
+    Restituisce i byte del PDF o None se non è possibile (es. acquirente mancante)."""
+    from cassa import genera_pdf_vendita_multipla
+    id_acquirente = riga_mod.get('id_acquirente')
+    if not id_acquirente:
+        return None
+    res_acq = requests.get(f"{URL_REST}/clienti?id=eq.{id_acquirente}&select=*", headers=HEADERS)
+    acquirente = res_acq.json()[0] if (res_acq.status_code == 200 and res_acq.json()) else None
+    if acquirente is None:
+        return None
+    libro = {
+        "codice_venditore": cliente_full.get('codice_personale', ''),
+        "id_libro": riga_mod['id_libro'],
+        "titolo": riga_mod.get('titolo', riga_mod.get('isbn', '')),
+        "prezzo_v": float(nuovo_prezzo),
+    }
+    modalita = riga_mod.get('metodo_pagamento') or 'contanti'
+    totale = float(nuovo_prezzo)
+    return genera_pdf_vendita_multipla(acquirente, [libro], totale, modalita, numero_ricevuta=None)
 
 
 def mostra_pagina():
@@ -232,6 +259,27 @@ def mostra_pagina():
                 del st.session_state["ricevuta_ritiro_ristampata_pdf"]
                 if "codice_cliente_ritiro" in st.session_state:
                     del st.session_state["codice_cliente_ritiro"]
+                st.rerun()
+        st.markdown("---")
+
+    # Se c'è una ricevuta di vendita rigenerata (dopo correzione prezzo di un libro venduto),
+    # mostriamo il download
+    if "ricevuta_vendita_ristampata_pdf" in st.session_state:
+        st.success("🎉 Ricevuta di vendita rigenerata con i prezzi aggiornati!")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.download_button(
+                label="📄 SCARICA RICEVUTA VENDITA AGGIORNATA (PDF)",
+                data=st.session_state["ricevuta_vendita_ristampata_pdf"],
+                file_name=f"ricevuta_vendita_{st.session_state.get('codice_cliente_vendita', 'cliente')}.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
+        with col2:
+            if st.button("🆕 Chiudi ricevuta vendita e continua", use_container_width=True, key="chiudi_vendita_rist"):
+                del st.session_state["ricevuta_vendita_ristampata_pdf"]
+                if "codice_cliente_vendita" in st.session_state:
+                    del st.session_state["codice_cliente_vendita"]
                 st.rerun()
         st.markdown("---")
 
@@ -280,57 +328,162 @@ def mostra_pagina():
     #  - Liquidazione (chi vende/ritira): per difetto (inferiore) - 0,50 € di rimborso spese gestione
     # I 0,50 €/libro sono il RIMBORSO SPESE DI GESTIONE trattenuto dal negozio (voce a sé stante):
     # l'acquirente paga 50% + 0,50 €, il venditore riceve 50% - 0,50 €.
+    libri_cliente['Prezzo di Copertina'] = libri_cliente['prezzo_copertina']
     libri_cliente['Prezzo Vendita (€)'] = libri_cliente['Prezzo Base'].apply(lambda b: math.ceil((b / 2) * 10) / 10 + 0.50)
     libri_cliente['Liquidazione (€)'] = libri_cliente['Prezzo Base'].apply(lambda b: math.floor((b / 2) * 10) / 10 - 0.50)
 
-    st.subheader("Libri del cliente")
-    colonne = ['id_libro', 'isbn', 'titolo', 'stato', 'Prezzo Vendita (€)', 'Liquidazione (€)', 'id_acquirente', 'metodo_pagamento', 'data_vendita']
+    # Separiamo i libri ATTIVI (vendibili/venduti) da quelli di conti GIÀ CHIUSI,
+    # cosi risultano ben distinti anche se il cliente ha portato altri libri dopo la chiusura.
+    df_attivi = libri_cliente[libri_cliente['stato'].isin(['disponibile', 'venduto'])]
+    df_chiusi = libri_cliente[libri_cliente['stato'] == 'chiuso_conto']
+
+    colonne = ['id_libro', 'isbn', 'titolo', 'stato', 'Prezzo Vendita (€)', 'Liquidazione (€)', 'Prezzo di Copertina', 'id_acquirente', 'metodo_pagamento', 'data_vendita', 'operatore']
     colonne = [c for c in colonne if c in libri_cliente.columns]
-    st.dataframe(libri_cliente[colonne], use_container_width=True, hide_index=True)
+
+    riga_selezionata = None
+
+    if df_attivi.empty:
+        st.info("📗 Nessun libro attivo (vendibile o venduto) per questo cliente.")
+    else:
+        st.subheader("📗 Libri attivi (vendibili / venduti)")
+        st.caption("💡 Clicca su una riga della tabella per selezionare il libro (invece di usare il menu a cascata).")
+        st.dataframe(
+            df_attivi[colonne],
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="tab_attivi",
+        )
+        _sel = st.session_state.get("tab_attivi", {}).get("selection", {}).get("rows", [])
+        if _sel:
+            id_sel = df_attivi.iloc[int(_sel[0])]['id_libro']
+            riga_selezionata = libri_cliente[libri_cliente['id_libro'] == id_sel].iloc[0]
+
+    if not df_chiusi.empty:
+        st.subheader("📕 Libri di conti già chiusi (restituiti / liquidati)")
+        st.caption("💡 Clicca su una riga per selezionare anche un libro di un conto chiuso.")
+        st.dataframe(
+            df_chiusi[colonne],
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="tab_chiusi",
+        )
+        _sel = st.session_state.get("tab_chiusi", {}).get("selection", {}).get("rows", [])
+        if _sel and riga_selezionata is None:
+            id_sel = df_chiusi.iloc[int(_sel[0])]['id_libro']
+            riga_selezionata = libri_cliente[libri_cliente['id_libro'] == id_sel].iloc[0]
+
+    # Il conto è considerato chiuso solo se NON rimangono libri attivi
+    # ('venduto' o 'disponibile'). Questo evita incongruenze in cui il conto
+    # risulta "chiuso" (per la presenza di libri 'chiuso_conto') ma rimane
+    # un libro 'disponibile' non ancora gestito/restituito.
+    libri_attivi = libri_cliente[libri_cliente['stato'].isin(['venduto', 'disponibile'])]
+    conto_gia_chiuso = libri_attivi.empty
 
     # --- MODIFICA PREZZO (correzione errori di digitazione) ---
     st.markdown("---")
     st.subheader("✏️ Correggi il prezzo di un libro (se digitato male)")
-    scelte_prezzo = {f"{r['id_libro']} - {r.get('titolo', r['isbn'])} (ISBN {r['isbn']})": r for _, r in libri_cliente.iterrows()}
-    libro_da_mod = st.selectbox("Seleziona il libro da correggere", list(scelte_prezzo.keys()))
-    riga_mod = scelte_prezzo[libro_da_mod]
-    nuovo_prezzo = st.number_input(
-        "Nuovo prezzo di copertina / base (€)",
-        min_value=0.0,
-        value=float(riga_mod.get('prezzo_inserito_mano', 0.0) or riga_mod.get('prezzo_copertina', 0.0)),
-        step=0.10,
-    )
-    if st.button("💾 Aggiorna prezzo libro", use_container_width=True):
-        res_up = requests.patch(
-            f"{URL_REST}/copie_libri?id_libro=eq.{riga_mod['id_libro']}",
-            headers=HEADERS,
-            json={"prezzo_inserito_mano": nuovo_prezzo},
-        )
-        if res_up.status_code < 400:
-            # Rigenera la ricevuta di ritiro COMPLETA (con il prezzo aggiornato) e la
-            # ripubblica online, cosi il prezzo aggiornato appare anche sulle ricevute online.
-            try:
-                pdf_ritiro = _rigenera_ricevuta_ritiro_completa(cliente_full, libri_cliente)
-                if pdf_ritiro:
-                    st.session_state["ricevuta_ritiro_ristampata_pdf"] = pdf_ritiro
-                    st.session_state["codice_cliente_ritiro"] = cliente['codice_personale']
-                    pubblica_ricevuta_online(
-                        st, pdf_ritiro, "ritiro", cliente_full,
-                        data_riferimento=datetime.date.today().strftime("%Y-%m-%d"),
-                        suffisso=cliente['codice_personale'],
-                    )
-            except Exception as e:
-                st.warning(f"Prezzo aggiornato, ma impossibile rigenerare/pubblicare la ricevuta: {e}")
-            st.success("✅ Prezzo aggiornato. Ricevuta di ritiro rigenerata per intero e aggiornata online.")
-            st.rerun()
+    
+    # Controlla se il conto è chiuso (nessun libro attivo rimasto)
+    conto_chiuso = conto_gia_chiuso
+    
+    if conto_chiuso:
+        st.error("🚫 Impossibile modificare i prezzi: il conto di questo cliente è già stato chiuso e liquidato.")
+        st.info("💡 I prezzi dei libri già venduti non possono essere modificati una volta che il conto è stato chiuso.")
+    else:
+        if riga_selezionata is None:
+            st.info("👆 Seleziona un libro dalla tabella qui sopra per correggerne il prezzo.")
         else:
-            st.error("Errore nell'aggiornamento del prezzo.")
+            riga_mod = riga_selezionata.to_dict()
+            st.markdown(f"**Libro selezionato:** `{riga_mod['id_libro']} - {riga_mod.get('titolo', riga_mod['isbn'])}` (stato: `{riga_mod['stato']}`)")
+            nuovo_prezzo = st.number_input(
+                "Nuovo prezzo di copertina / base (€)",
+                min_value=0.0,
+                value=float(riga_mod.get('prezzo_inserito_mano', 0.0) or riga_mod.get('prezzo_copertina', 0.0)),
+                step=0.10,
+            )
+            
+            # Previene aggiornamenti doppi usando un flag in session_state
+            update_key = f"price_update_in_progress_{cliente['id']}"
+            if st.button("💾 Aggiorna prezzo libro", use_container_width=True) and not st.session_state.get(update_key, False):
+                st.session_state[update_key] = True
+                
+                res_up = requests.patch(
+                    f"{URL_REST}/copie_libri?id_libro=eq.{riga_mod['id_libro']}",
+                    headers=HEADERS,
+                    json={"prezzo_inserito_mano": nuovo_prezzo},
+                )
+                if res_up.status_code < 400 and res_up.json():
+                    # Aggiorna il prezzo anche nel DataFrame in memoria PRIMA di rigenerare
+                    # la ricevuta: altrimenti verrebbe ristampata quella col prezzo vecchio.
+                    libri_cliente.loc[libri_cliente['id_libro'] == riga_mod['id_libro'], 'prezzo_inserito_mano'] = nuovo_prezzo
+                    # Aggiorna anche il "Prezzo di Copertina" (colonna visibile): quel valore
+                    # deriva dal catalogo, quindi lo aggiorniamo in memoria e su catalogo_libri
+                    # (per ISBN), cosi la colonna "Prezzo di Copertina" risulta aggiornata.
+                    libri_cliente.loc[libri_cliente['isbn'] == riga_mod['isbn'], 'prezzo_copertina'] = nuovo_prezzo
+                    requests.patch(
+                        f"{URL_REST}/catalogo_libri?isbn=eq.{riga_mod['isbn']}",
+                        headers=HEADERS,
+                        json={"prezzo_copertina": nuovo_prezzo},
+                    )
+                    # Rigenera la ricevuta di ritiro COMPLETA (con il prezzo aggiornato) e la
+                    # ripubblica online, cosi il prezzo aggiornato appare anche sulle ricevute online.
+                    try:
+                        pdf_ritiro = _rigenera_ricevuta_ritiro_completa(cliente_full, libri_cliente, includi_id_libro=riga_mod['id_libro'])
+                        if pdf_ritiro:
+                            st.session_state["ricevuta_ritiro_ristampata_pdf"] = pdf_ritiro
+                            st.session_state["codice_cliente_ritiro"] = cliente['codice_personale']
+                            pubblica_ricevuta_online(
+                                st, pdf_ritiro, "ritiro", cliente_full,
+                                data_riferimento=datetime.date.today().strftime("%Y-%m-%d"),
+                                suffisso=cliente['codice_personale'],
+                            )
+                    except Exception as e:
+                        st.warning(f"Prezzo aggiornato, ma impossibile rigenerare/pubblicare la ricevuta di ritiro: {e}")
+                    # Se il libro è VENDUTO, rigenera anche la ricevuta di VENDITA (con il prezzo aggiornato)
+                    if str(riga_mod.get('stato')) == 'venduto':
+                        try:
+                            pdf_vendita = _rigenera_ricevuta_vendita(cliente_full, riga_mod, nuovo_prezzo)
+                            if pdf_vendita:
+                                st.session_state["ricevuta_vendita_ristampata_pdf"] = pdf_vendita
+                                st.session_state["codice_cliente_vendita"] = cliente['codice_personale']
+                                pubblica_ricevuta_online(
+                                    st, pdf_vendita, "vendita", cliente_full,
+                                    data_riferimento=datetime.date.today().strftime("%Y-%m-%d"),
+                                    suffisso=cliente['codice_personale'],
+                                )
+                        except Exception as e:
+                            st.warning(f"Prezzo aggiornato, ma impossibile rigenerare/pubblicare la ricevuta di vendita: {e}")
+                    # Il flag va resettato PRIMA di st.rerun(): altrimenti resterebbe True
+                    # e la pagina mostrerebbe per sempre "Aggiornamento in corso...".
+                    st.session_state[update_key] = False
+                    st.success("✅ Prezzo aggiornato. Ricevuta di ritiro rigenerata per intero e aggiornata online.")
+                    st.rerun()
+                else:
+                    st.session_state[update_key] = False
+                    st.error("Errore nell'aggiornamento del prezzo: nessuna riga aggiornata nel database.")
+            elif st.session_state.get(update_key, False):
+                st.info("⏳ Aggiornamento in corso... Attendere prego.")
+
+            # Cambio stato del libro (es. venduto -> disponibile) direttamente da qui
+            if str(riga_mod.get('stato')) == 'venduto':
+                st.markdown("---")
+                if st.button("↩️ Riporta il libro in 'disponibile' (storna vendita)", use_container_width=True, key="stato_a_disponibile"):
+                    res = requests.patch(
+                        f"{URL_REST}/copie_libri?id_libro=eq.{riga_mod['id_libro']}",
+                        headers=HEADERS,
+                        json=payload_storno_vendita(),
+                    )
+                    if res.status_code < 400:
+                        st.success("Libro riportato in 'disponibile'.")
+                        st.rerun()
+                    else:
+                        st.error("Errore nel cambio di stato.")
 
     tab_chiusura, tab_vendita, tab_ritiro = st.tabs(["Chiudi conto", "Storno vendita", "Storno ritiro"])
-
-    # Il conto è già chiuso se non ci sono più libri attivi (venduti o disponibili) per questo cliente
-    libri_attivi = libri_cliente[libri_cliente['stato'].isin(['venduto', 'disponibile'])]
-    conto_gia_chiuso = libri_attivi.empty
 
     with tab_chiusura:
          if conto_gia_chiuso:
@@ -353,15 +506,30 @@ def mostra_pagina():
                           suffisso=cliente['codice_personale'],
                       )
 
-                      # Chiude il conto: i libri venduti diventano 'chiuso_conto' (liquidati), quelli disponibili diventano 'ritirato' (non più in nostro possesso)
-                      res_disp = requests.patch(f"{URL_REST}/copie_libri?id_venditore=eq.{cliente['id']}&stato=eq.disponibile", headers=HEADERS, json={"stato": "ritirato"})
+                      # Chiude il conto: i libri venduti diventano 'chiuso_conto' (liquidati),
+                      # quelli disponibili diventano a loro volta 'chiuso_conto' (conto chiuso).
+                      res_disp = requests.patch(f"{URL_REST}/copie_libri?id_venditore=eq.{cliente['id']}&stato=eq.disponibile", headers=HEADERS, json={"stato": "chiuso_conto"})
                       res_vend = requests.patch(f"{URL_REST}/copie_libri?id_venditore=eq.{cliente['id']}&stato=eq.venduto", headers=HEADERS, json={"stato": "chiuso_conto"})
-                      
-                      if res_disp.status_code < 400 and res_vend.status_code < 400:
+
+                      # Verifica che la chiusura sia effettivamente completa: nessun libro
+                      # deve rimanere in stato 'venduto' o 'disponibile' (evita che un
+                      # libro 'disponibile' resti nel magazzino pur con il conto "chiuso").
+                      res_ver = requests.get(
+                          f"{URL_REST}/copie_libri?select=stato&id_venditore=eq.{cliente['id']}",
+                          headers=HEADERS,
+                      )
+                      stati_rimasti = [r.get('stato') for r in (res_ver.json() if res_ver.status_code == 200 else [])]
+                      chiusura_ok = (
+                          res_disp.status_code < 400
+                          and res_vend.status_code < 400
+                          and not any(s in ('venduto', 'disponibile') for s in stati_rimasti)
+                      )
+
+                      if chiusura_ok:
                           st.success("Conto chiuso con successo: libri venduti liquidati e libri disponibili restituiti!")
                           st.rerun()
                       else:
-                          st.error("Errore nell'aggiornamento dello stato dei libri su Supabase.")
+                          st.error("Errore nell'aggiornamento dello stato dei libri su Supabase: alcuni libri risultano ancora attivi. Riprova la chiusura del conto.")
                   except Exception as e:
                       st.error(f"Errore nella chiusura del conto: {str(e)}")
 
@@ -369,11 +537,13 @@ def mostra_pagina():
         libri_venduti = libri_cliente[libri_cliente['stato'] == 'venduto']
         if libri_venduti.empty:
             st.info("Nessuna vendita da storno per questo cliente.")
+        elif riga_selezionata is None or riga_selezionata['stato'] != 'venduto':
+            st.info("👆 Seleziona un libro VENDUTO dalla tabella qui sopra per stornarne la vendita.")
         else:
-            scelte = {f"{r['id_libro']} - {r['isbn']}": r['id_libro'] for _, r in libri_venduti.iterrows()}
-            scelta = st.selectbox("Seleziona il libro da restituire disponibile", list(scelte.keys()))
+            riga_mod = riga_selezionata.to_dict()
+            st.markdown(f"**Libro selezionato:** `{riga_mod['id_libro']} - {riga_mod.get('titolo', riga_mod['isbn'])}`")
             if st.button("↩️ Storna vendita", use_container_width=True):
-                id_libro = scelte[scelta]
+                id_libro = riga_mod['id_libro']
                 res = requests.patch(f"{URL_REST}/copie_libri?id_libro=eq.{id_libro}", headers=HEADERS, json=payload_storno_vendita())
                 if res.status_code < 400:
                     st.success("Vendita stornata. Il libro è tornato disponibile.")
@@ -384,11 +554,13 @@ def mostra_pagina():
         libri_ritirati = libri_cliente[libri_cliente['stato'] == 'disponibile']
         if libri_ritirati.empty:
             st.info("Nessun ritiro da storno per questo cliente.")
+        elif riga_selezionata is None or riga_selezionata['stato'] != 'disponibile':
+            st.info("👆 Seleziona un libro DISPONIBILE dalla tabella qui sopra per stornarne il ritiro.")
         else:
-            scelte = {f"{r['id_libro']} - {r['isbn']}": r['id_libro'] for _, r in libri_ritirati.iterrows()}
-            scelta = st.selectbox("Seleziona il libro da togliere dal ritiro", list(scelte.keys()))
+            riga_mod = riga_selezionata.to_dict()
+            st.markdown(f"**Libro selezionato:** `{riga_mod['id_libro']} - {riga_mod.get('titolo', riga_mod['isbn'])}`")
             if st.button("🗑️ Storna ritiro (rimuovi dal magazzino)", use_container_width=True):
-                id_libro = scelte[scelta]
+                id_libro = riga_mod['id_libro']
                 # Lo storno di un ritiro DEVE rimuovere fisicamente la copia dal magazzino
                 res = requests.delete(f"{URL_REST}/copie_libri?id_libro=eq.{id_libro}", headers=HEADERS)
                 if res.status_code < 400:

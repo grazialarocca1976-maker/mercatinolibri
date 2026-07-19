@@ -9,8 +9,6 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
-import ricevute_condivise as ricevute_condivise_mod
-ricevute_condivise_mod = importlib.reload(ricevute_condivise_mod)
 from ricevute_condivise import (
     inserisci_intestazione_marconi,
     inserisci_anagrafica_cliente,
@@ -634,6 +632,7 @@ def mostra_pagina():
                                     "rimborso_spese": float(rimborso_totale),
                                     "totale_complessivo": float(totale_con_rimborso),
                                     "numero_articoli": len(st.session_state["carrello_cassa"]),
+                                    "operatore": st.session_state.get("operatore", "Sconosciuto"),
                                 },
                             )
                         except Exception:
@@ -644,13 +643,14 @@ def mostra_pagina():
                         # Salviamo il PDF generato in session state in modo che possa essere scaricato
                         st.session_state["vendita_completata_pdf"] = pdf_data
                         
+                        op_nome = st.session_state.get("operatore", "anon").lower()
                         pubblica_ricevuta_online(
                             st,
                             pdf_data,
                             "vendita",
                             dati_acquirente,
                             data_riferimento=data_oggi_fissa,
-                            suffisso=f"{metodo_paga.lower().replace(' ', '-')}-{len(st.session_state['carrello_cassa'])}-articoli"
+                            suffisso=f"op-{op_nome}-{metodo_paga.lower().replace(' ', '-')}-{len(st.session_state['carrello_cassa'])}-articoli"
                         )
                         st.session_state["carrello_cassa"] = []
                         # Invalida la cache dei dati (copie/catalogo/clienti) per ricaricare i dati freschi

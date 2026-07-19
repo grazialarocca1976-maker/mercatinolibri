@@ -86,3 +86,20 @@ def mostra_pagina():
                     st.rerun()
                 else:
                     st.error("Errore durante l'azzeramento.")
+
+        # --- CANCELLAZIONE CLIENTI (dati di prova) ---
+        st.markdown("---")
+        st.subheader("🗑️ Cancella tutti i clienti (dati di prova)")
+        st.write("Elimina TUTTI i clienti e i dati a loro collegati (copie, ricevute). Utile per rimuovere i dati di test e ricominciare da zero. Gli account operatori NON vengono toccati.")
+        conferma_clienti = st.checkbox("Sono consapevole che questa azione eliminerà definitivamente TUTTI i clienti e i loro libri/ricevute.", key="conf_canc_clienti")
+        if conferma_clienti:
+            if st.button("🗑️ CANCELLA TUTTI I CLIENTI E DATI COLLEGATI"):
+                # Ordine importante: prima le tabelle figlie (FK), poi i clienti
+                requests.delete(f"{URL_REST}/copie_libri", headers=HEADERS)
+                requests.delete(f"{URL_REST}/ricevute", headers=HEADERS)
+                res_del_c = requests.delete(f"{URL_REST}/clienti", headers=HEADERS)
+                if res_del_c.status_code < 400:
+                    st.success("🎉 Clienti e dati collegati eliminati! Ora puoi registrare i clienti reali.")
+                    st.rerun()
+                else:
+                    st.error("Errore durante l'eliminazione dei clienti.")

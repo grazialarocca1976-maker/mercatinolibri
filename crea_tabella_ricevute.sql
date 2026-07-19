@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS ricevute (
 -- aggiungi le nuove colonne in modo idempotente.
 ALTER TABLE ricevute ADD COLUMN IF NOT EXISTS tipo TEXT NOT NULL DEFAULT 'V';
 ALTER TABLE ricevute ADD COLUMN IF NOT EXISTS numero_progressivo INT NOT NULL DEFAULT 0;
+ALTER TABLE ricevute ADD COLUMN IF NOT EXISTS operatore TEXT;
 
 ALTER TABLE ricevute ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Anon full access ricevute" ON ricevute;

@@ -21,6 +21,9 @@ try:
 except Exception:
     pass
 
+if "sidebar_aperta" not in st.session_state:
+    st.session_state["sidebar_aperta"] = False
+
 # --- STILE GRAFICO (sfondo bianco, bottoni con icone) ---
 st.markdown("""
 <style>
@@ -30,8 +33,15 @@ st.markdown("""
         --libro-blu: #1565c0;
         --libro-rosso: #b33939;
     }
+    /* Sfondo "pieno di libri": immagine ad alta risoluzione sfocata di libri con velo bianco/crema per una perfetta leggibilità */
     .stApp {
-        background: #ffffff;
+        background-color: #fcfbf7;
+        background-image:
+            linear-gradient(rgba(253, 251, 247, 0.90), rgba(253, 251, 247, 0.90)),
+            url('https://images.unsplash.com/photo-1523986371872-9d3be1d93d92?auto=format&fit=crop&q=80&w=1600');
+        background-size: cover;
+        background-repeat: no-repeat;
+        background-attachment: fixed;
     }
     h1, h2, h3 {
         color: var(--libro-marrone) !important;
@@ -46,9 +56,9 @@ st.markdown("""
         font-size: 16px;
         font-weight: bold;
         margin-bottom: 12px;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+        box-shadow:0 2px 6px rgba(0,0,0,0.2);
     }
-    /* Bottoni di navigazione laterali grandi, senza pallino */
+    /* Bottoni di navigazione laterali grandi, colori tenui */
     section[data-testid="stSidebar"] .stButton > button {
         width: 100%;
         text-align: left;
@@ -57,24 +67,86 @@ st.markdown("""
         font-size: 15px;
         font-weight: 600;
         border-radius: 10px;
-        border: 2px solid var(--libro-marrone);
-        background: #ffffff;
-        color: var(--libro-marrone);
+        border: 2px solid #c9b79c;
+        background: #fbf6ec;
+        color: #5d4037;
         transition: all 0.15s ease;
     }
     section[data-testid="stSidebar"] .stButton > button:hover {
-        background: var(--libro-marrone);
-        color: #fff;
+        background: #f0e6d2;
         border-color: var(--libro-marrone);
     }
     /* Bottone attivo (evidenziato) */
     section[data-testid="stSidebar"] .stButton > button[data-active="true"] {
+        background: #efe0c8;
+        color: #4e342e;
+        border-color: var(--libro-marrone);
+    }
+    /* Bottoni HOME: colori tenui e facilmente identificabili */
+    button[key="home_vendita"] {
+        background: #d8f0e0; color: #1b5e20; border: 2px solid #81c784;
+    }
+    button[key="home_vendita"]:hover { background: #bce9cd; }
+    button[key="home_ritiro"] {
+        background: #d6e8fb; color: #0d47a1; border: 2px solid #64b5f6;
+    }
+    button[key="home_ritiro"]:hover { background: #bcdcf7; }
+    button[key="home_altro"] {
+        background: #fdeecb; color: #8d6e00; border: 2px solid #ffd54f;
+    }
+    button[key="home_altro"]:hover { background: #fbe3a8; }
+    /* Pulsanti personalizzati per aprire/chiudere il menu laterale. */
+    .st-key-btn_apri_menu {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        z-index: 999999;
+    }
+    .st-key-btn_apri_menu button {
+        min-width: 112px;
+        height: 42px;
+        padding: 0 16px;
+        border-radius: 10px;
+        border: 2px solid #c9b79c;
         background: var(--libro-marrone);
         color: #fff;
-        border-color: var(--libro-marrone);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.22);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: 0;
+    }
+    .st-key-btn_apri_menu button:hover {
+        background: #5a371b;
+        border-color: #5a371b;
+        color: #fff;
+    }
+    .st-key-btn_chiudi_menu button {
+        margin-bottom: 12px;
+        justify-content: center !important;
+        text-align: center !important;
+        background: var(--libro-marrone) !important;
+        color: #fff !important;
+        border-color: var(--libro-marrone) !important;
+    }
+    section[data-testid="stSidebar"] button[aria-label*="sidebar" i],
+    section[data-testid="stSidebar"] button[title*="sidebar" i] {
+        display: none !important;
     }
 </style>
 """, unsafe_allow_html=True)
+
+if not st.session_state["sidebar_aperta"]:
+    st.markdown("""
+    <style>
+        section[data-testid="stSidebar"] {
+            display: none !important;
+        }
+    </style>
+    """, unsafe_allow_html=True)
 
 # --- SISTEMA DI LOGIN OPERATORE ---
 # Login persistente con auto-login basato su URL Query Parameters nativo (funziona sempre, anche al refresh!)
@@ -123,6 +195,11 @@ if not st.session_state["logged_in"]:
             )
     st.stop() # Blocca l'esecuzione del resto dell'app se non si è loggati
 
+if not st.session_state["sidebar_aperta"]:
+    if st.button("☰ MENU", key="btn_apri_menu", width="content"):
+        st.session_state["sidebar_aperta"] = True
+        st.rerun()
+
 st.title("📚 Gestionale Mercatino dei Libri Usati")
 
 # Header operatore sempre visibile in alto
@@ -145,6 +222,10 @@ HEADERS = {
 PASSWORD_AMMINISTRATORE = st.secrets.get("password_admin", "Marconi2026")
 
 # Menu laterale con pulsanti grandi e leggibili (senza pallino) + icona per ciascuno
+if st.sidebar.button("☰ Chiudi menu", key="btn_chiudi_menu", width="stretch"):
+    st.session_state["sidebar_aperta"] = False
+    st.rerun()
+
 st.sidebar.markdown("### 🧭 Navigazione")
 
 # Pulsante HOME: torna alla schermata con i 3 bottoni di scelta
@@ -593,23 +674,18 @@ else:
 # --- ARCHIVI CENTRALIZZATI ---
 if menu == "Registrazione Clienti":
     import clienti
-    importlib.reload(clienti)
     clienti.mostra_pagina()
 elif menu == "Ritiro Libri (Venditori)":
     import ritiro
-    importlib.reload(ritiro)
     ritiro.mostra_pagina()
 elif menu == "Cassa e Vendita Rapida":
     import cassa
-    importlib.reload(cassa)
     cassa.mostra_pagina()
 elif menu == "Gestione Conti Cliente":
     import gestione_conti
-    importlib.reload(gestione_conti)
     gestione_conti.mostra_pagina()
 elif menu == "🔍 Cerca Libro":
     import cerca_libro
-    importlib.reload(cerca_libro)
     cerca_libro.mostra_pagina()
 elif menu == " Archivio":
     st.header("📁 Archivio")
@@ -618,7 +694,7 @@ elif menu == " Archivio":
     ])
 
     with tab_ricevute:
-        st.subheader("Archivio Ricevute")
+        st.subheader("📂 Archivio Ricevute Organizzato")
         risultato = _archivio_ricevute()
         if not risultato.get("ok"):
             st.info("Nessuna ricevuta caricata online finora.")
@@ -627,20 +703,132 @@ elif menu == " Archivio":
             if not objs:
                 st.info("Nessuna ricevuta caricata online finora.")
             else:
-                st.subheader("Elenco ricevute disponibili")
+                # Parsing dei file ricevuti per estrarre informazioni strutturate
                 rows = []
                 for o in objs:
                     name = o.get('name') or o.get('Key') or o.get('id')
+                    if not name or name.startswith('.'):
+                        continue
                     updated = o.get('updated_at') or o.get('created_at') or o.get('last_modified')
-                    public_url = build_public_storage_url(PROJECT_ID, 'ricevute', name) if name else None
-                    rows.append({'Nome file': name, 'Data': updated, 'URL': public_url})
+                    # Gestiamo la formattazione della data di modifica
+                    if updated:
+                        try:
+                            dt = datetime.datetime.fromisoformat(updated.replace('Z', '+00:00'))
+                            updated_formatted = dt.strftime("%d/%m/%Y %H:%M")
+                        except Exception:
+                            updated_formatted = str(updated)
+                    else:
+                        updated_formatted = "N.D."
+                        
+                    public_url = build_public_storage_url(PROJECT_ID, 'ricevute', name)
+                    
+                    # Splittiamo il nome del file per estrarre tipo, data e codice cliente
+                    # Formato standard: tipo-YYYY-MM-DD-codice_cliente-suffisso.pdf
+                    parts = name.replace('.pdf', '').split('-')
+                    tipo = "Altro 📄"
+                    data_str = "N.D."
+                    codice_cliente = "N.D."
+                    dettagli = ""
+                    operatore_estratto = "N.D."
+                    
+                    # Estraiamo l'operatore se presente nel nome del file nel formato '-op-nomeoperatore-'
+                    if "-op-" in name:
+                        try:
+                            sub_parts = name.split("-op-")
+                            if len(sub_parts) > 1:
+                                operatore_estratto = sub_parts[1].split("-")[0].upper()
+                        except Exception:
+                            pass
+
+                    if parts:
+                        if parts[0] == "vendita":
+                            tipo = "Vendita 🛒"
+                        elif parts[0] == "ritiro":
+                            tipo = "Ritiro 📥"
+                        elif parts[0] == "resoconto":
+                            tipo = "Rendiconto 📊"
+                            
+                        # Controlla se abbiamo la data nei segmenti 1, 2, 3 (es. 2026-07-18)
+                        if len(parts) >= 4 and parts[1].isdigit() and len(parts[1]) == 4:
+                            data_str = f"{parts[3]}/{parts[2]}/{parts[1]}" # DD/MM/YYYY
+                            rem = parts[4:]
+                        else:
+                            rem = parts[1:]
+                            
+                        if rem:
+                            codice_cliente = rem[0].upper()
+                            # Togliamo la parte dell'operatore dai dettagli per pulizia
+                            raw_details = "-".join(rem[1:])
+                            if f"op-{operatore_estratto.lower()}-" in raw_details:
+                                raw_details = raw_details.replace(f"op-{operatore_estratto.lower()}-", "")
+                            elif f"op-{operatore_estratto.lower()}" in raw_details:
+                                raw_details = raw_details.replace(f"op-{operatore_estratto.lower()}", "")
+                            dettagli = raw_details.replace('-', ' ')
+                    
+                    rows.append({
+                        'Nome file': name,
+                        'Tipo': tipo,
+                        'Data': data_str,
+                        'Cliente': codice_cliente,
+                        'Dettagli': dettagli,
+                        'Operatore': operatore_estratto,
+                        'Aggiornato': updated_formatted,
+                        'URL': public_url
+                    })
+                
                 df_r = pd.DataFrame(rows)
-                st.dataframe(df_r[['Nome file', 'Data']], use_container_width=True, hide_index=True)
-                st.markdown("---")
-                st.subheader("Scarica ricevute")
-                for r in rows:
-                    if r['URL']:
-                        st.markdown(f"📥 [{r['Nome file']}]({r['URL']}) — {r['Data']}")
+                
+                # Sezione di ricerca e suddivisione
+                st.markdown("#### Filtra e Cerca Ricevute")
+                c1, c2 = st.columns([1, 2])
+                with c1:
+                    categoria = st.selectbox(
+                        "Suddividi per categoria:", 
+                        ["Tutte", "Vendite 🛒", "Ritiri 📥", "Rendiconto 📊", "Altro 📄"]
+                    )
+                with c2:
+                    search_term = st.text_input(
+                        "🔍 Cerca per Codice Cliente, Operatore, Data (es. 18/07/2026) o dettagli:", 
+                        ""
+                    ).strip().lower()
+                
+                # Applica filtri
+                df_filtered = df_r.copy()
+                if categoria != "Tutte":
+                    df_filtered = df_filtered[df_filtered['Tipo'] == categoria]
+                    
+                if search_term:
+                    df_filtered = df_filtered[
+                        df_filtered['Nome file'].str.lower().str.contains(search_term) |
+                        df_filtered['Tipo'].str.lower().str.contains(search_term) |
+                        df_filtered['Data'].str.lower().str.contains(search_term) |
+                        df_filtered['Cliente'].str.lower().str.contains(search_term) |
+                        df_filtered['Operatore'].str.lower().str.contains(search_term) |
+                        df_filtered['Dettagli'].str.lower().str.contains(search_term)
+                    ]
+                
+                if df_filtered.empty:
+                    st.info("Nessuna ricevuta trovata con i filtri inseriti.")
+                else:
+                    st.write(f"Trovate **{len(df_filtered)}** ricevute:")
+                    
+                    # Mostra un elenco pulito e ordinato con bottoni dedicati
+                    # Ordiniamo per data/nome decrescente così le più recenti sono in alto
+                    df_filtered = df_filtered.sort_values(by=['Aggiornato', 'Nome file'], ascending=False)
+                    
+                    for idx, row in df_filtered.head(50).iterrows():
+                        col_info, col_btn = st.columns([4, 1])
+                        with col_info:
+                            st.markdown(f"**{row['Tipo']}** | Data Ricevuta: `{row['Data']}` | Cliente: `{row['Cliente']}` | Operatore: `👤 {row['Operatore']}`")
+                            if row['Dettagli']:
+                                st.markdown(f"↳ *Dettagli: {row['Dettagli']}*")
+                            st.caption(f"Nome file: `{row['Nome file']}` | Ultima modifica: {row['Aggiornato']}")
+                        with col_btn:
+                            st.link_button("📂 Apri PDF", row['URL'], use_container_width=True)
+                        st.markdown("<hr style='margin: 8px 0px; border-color: rgba(49, 51, 63, 0.08);'>", unsafe_allow_html=True)
+                        
+                    if len(df_filtered) > 50:
+                        st.caption("💡 Vengono mostrate solo le prime 50 ricevute più recenti. Utilizza la ricerca per trovare quelle meno recenti.")
 
     with tab_clienti:
         st.subheader("Archivio anagrafica clienti")

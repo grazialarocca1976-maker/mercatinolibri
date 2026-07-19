@@ -10,8 +10,6 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
-import ricevute_condivise as ricevute_condivise_mod
-ricevute_condivise_mod = importlib.reload(ricevute_condivise_mod)
 from ricevute_condivise import (
     inserisci_intestazione_marconi,
     inserisci_anagrafica_cliente,
@@ -191,6 +189,60 @@ def genera_pdf_rotolo_etichette(libri_ritirati):
             from reportlab.platypus import PageBreak
             story.append(PageBreak())
             
+            doc.build(story)
+            buffer.seek(0)
+            return buffer.getvalue()
+
+def genera_pdf_inventario_materia(df_totale):
+    """Genera un PDF dell'inventario dei libri 'disponibile' (in carico), raggruppati per materia."""
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    story = []
+    styles = getSampleStyleSheet()
+    inserisci_intestazione_marconi(story)
+    story.append(Paragraph("<b>INVENTARIO LIBRI IN CARICO (per Materia)</b>", styles['Title']))
+    story.append(Paragraph(f"Data: {datetime.date.today().strftime('%d/%m/%Y')}", styles['Normal']))
+    story.append(Spacer(1, 10))
+
+    df_disp = df_totale[df_totale['Stato'] == 'disponibile'].copy()
+    if df_disp.empty:
+        story.append(Paragraph("Nessun libro in carico (disponibile) al momento.", styles['Normal']))
+    else:
+        materie = sorted([m for m in df_disp['Materia'].dropna().astype(str) if m and m.lower() != 'nan']) + ['(senza materia)']
+        stile_cella = ParagraphStyle('CellaInv', parent=styles['Normal'], fontSize=8, leading=10)
+        stile_cella_b = ParagraphStyle('CellaInvB', parent=styles['Normal'], fontSize=8, leading=10, fontName='Helvetica-Bold')
+        for mat in materie:
+            if mat == '(senza materia)':
+                sub = df_disp[df_disp['Materia'].isna() | (df_disp['Materia'].astype(str).str.lower() == 'nan') | (df_disp['Materia'].astype(str) == '')]
+            else:
+                sub = df_disp[df_disp['Materia'].astype(str) == mat]
+            if sub.empty:
+                continue
+            story.append(Paragraph(f"<b>{str(mat).upper()}  —  n. {len(sub)}</b>", styles['Heading3']))
+            dati = [[
+                Paragraph("<b>Cod. Copertina</b>", stile_cella_b),
+                Paragraph("<b>Titolo</b>", stile_cella_b),
+                Paragraph("<b>ISBN</b>", stile_cella_b),
+                Paragraph("<b>Prezzo Cop.</b>", stile_cella_b),
+            ]]
+            for _, r in sub.iterrows():
+                dati.append([
+                    Paragraph(str(r.get('Codice Copertina', '')), stile_cella),
+                    Paragraph(str(r.get('Titolo', r.get('ISBN', ''))).upper(), stile_cella),
+                    Paragraph(str(r.get('ISBN', '')), stile_cella),
+                    Paragraph(f"{float(r.get('Prezzo Copertina (€)', 0.0) or 0.0):.2f} €", stile_cella),
+                ])
+            t = Table(dati, colWidths=[100, 300, 100, 80])
+            t.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.grey),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+                ('GRID', (0,0), (-1,-1), 0.5, colors.black),
+                ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                ('TOPPADDING', (0,0), (-1,-1), 4),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+            ]))
+            story.append(t)
+            story.append(Spacer(1, 10))
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
@@ -346,9 +398,15 @@ def mostra_pagina():
                                 "isbn": item['isbn'], 
                                 "id_venditore": dati_cliente['id'], 
                                 "stato": "disponibile", 
-                                "prezzo_inserito_mano": item['prezzo']
+                                "prezzo_inserito_mano": item['prezzo'],
+                                "operatore": st.session_state.get("operatore", "Sconosciuto"),
                             }
                             res_ins = requests.post(f"{URL_REST}/copie_libri", headers=HEADERS, json=dati_invio)
+                            # Se la colonna 'operatore' non esiste ancora su copie_libri,
+                            # riprova senza di essa cosi il ritiro continua a funzionare.
+                            if res_ins.status_code >= 400:
+                                dati_invio.pop("operatore", None)
+                                res_ins = requests.post(f"{URL_REST}/copie_libri", headers=HEADERS, json=dati_invio)
                             if res_ins.status_code < 400:
                                 risposta_server = res_ins.json()
                                 
@@ -399,6 +457,7 @@ def mostra_pagina():
                                         "rimborso_spese": 0.0,
                                         "totale_complessivo": float(sum(float(l.get('prezzo', 0.0) or 0.0) for l in libri_per_ricevuta)),
                                         "numero_articoli": len(libri_per_ricevuta),
+                                        "operatore": st.session_state.get("operatore", "Sconosciuto"),
                                     },
                                 )
                             except Exception:
@@ -422,13 +481,14 @@ def mostra_pagina():
             with col_pdf_f:
                 pdf_f_data = genera_pdf_ricevuta(dati_cliente, st.session_state["libri_appena_salvati"], st.session_state.get("numero_ricevuta_ritiro_corrente"))
                 st.download_button(label="📄 SCARICA RICEVUTA COMPLETA A4", data=pdf_f_data, file_name="ricevuta_marconi.pdf", mime="application/pdf", use_container_width=True)
+                op_nome = st.session_state.get("operatore", "anon").lower()
                 pubblica_ricevuta_online(
                     st,
                     pdf_f_data,
                     "ritiro",
                     dati_cliente,
                     data_riferimento=datetime.date.today().strftime("%Y-%m-%d"),
-                    suffisso=f"{len(st.session_state['libri_appena_salvati'])}-libri"
+                    suffisso=f"op-{op_nome}-{len(st.session_state['libri_appena_salvati'])}-libri"
                 )
                 
             with col_pdf_et:
@@ -517,6 +577,19 @@ def mostra_pagina():
                     df_totale = df_totale[['Codice Etichetta', 'isbn', 'titolo', 'materia', 'prezzo_inserito_mano', 'stato']]
                     df_totale.columns = ['Codice Copertina', 'ISBN', 'Titolo', 'Materia', 'Prezzo Copertina (€)', 'Stato']
                     st.dataframe(df_totale.sort_values(by='Codice Copertina'), use_container_width=True, hide_index=True)
+
+                    st.markdown("---")
+                    st.subheader("🖨️ Stampa inventario libri in carico (per materia)")
+                    st.caption("Genera un PDF dei soli libri 'disponibile' (ancora in carico), raggruppati per materia.")
+                    if st.button("🖨️ Genera PDF inventario per materia", use_container_width=True, key="btn_inv_mat"):
+                        pdf_inv = genera_pdf_inventario_materia(df_totale)
+                        st.download_button(
+                            label="⬇️ Scarica PDF Inventario per Materia",
+                            data=pdf_inv,
+                            file_name="inventario_per_materia.pdf",
+                            mime="application/pdf",
+                            use_container_width=True,
+                        )
             else: 
                 st.info("Nessun libro usato presente in magazzino al momento.")
         else: 
