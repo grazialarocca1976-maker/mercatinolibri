@@ -175,7 +175,7 @@ def _rigenera_ricevuta_ritiro_completa(cliente_full, libri_cliente, includi_id_l
     """Rigenera la ricevuta di ritiro COMPLETA del cliente con i prezzi aggiornati.
     Usa tutti i libri ancora 'disponibile' (ritirati ma non venduti) del cliente,
     cosi la ricevuta viene ristampata per intero. Se si passa 'includi_id_libro',
-    quel libro viene incluso nella ricevuta anche se non è in stato 'disponibile'
+    quel libro viene include nella ricevuta anche se non è in stato 'disponibile'
     (es. è già 'venduto'), così la correzione prezzo rigenera la ricevuta giusta."""
     from ritiro import genera_pdf_ricevuta
     maschera = libri_cliente['stato'] == 'disponibile'
@@ -186,10 +186,15 @@ def _rigenera_ricevuta_ritiro_completa(cliente_full, libri_cliente, includi_id_l
         return None
     libri_ritirati = []
     for _, r in disponibili.iterrows():
+        titolo_completo = r.get('titolo', r['isbn'])
+        # Se prevede fascicoli, aggiunge l'annotazione nel titolo per il PDF
+        if r.get('prevede_fascicoli', False):
+            titolo_completo += f" (Fascicoli: {r.get('fascicoli_consegnati', 0)}/{r.get('totale_fascicoli', 0)})"
+            
         libri_ritirati.append({
             "etichetta": f"{r['id_libro']} - {cliente_full['codice_personale']}",
             "isbn": r['isbn'],
-            "titolo": r.get('titolo', r['isbn']),
+            "titolo": titolo_completo,
             "prezzo": float(r.get('prezzo_inserito_mano', 0.0) or r.get('prezzo_copertina', 0.0)),
         })
     return genera_pdf_ricevuta(cliente_full, libri_ritirati)
@@ -332,12 +337,26 @@ def mostra_pagina():
     libri_cliente['Prezzo Vendita (€)'] = libri_cliente['Prezzo Base'].apply(lambda b: math.ceil((b / 2) * 10) / 10 + 0.50)
     libri_cliente['Liquidazione (€)'] = libri_cliente['Prezzo Base'].apply(lambda b: math.floor((b / 2) * 10) / 10 - 0.50)
 
+    # Colonna calcolata per visualizzare lo stato dei fascicoli
+    def _format_fascicoli(row):
+        prevede = row.get("prevede_fascicoli", False)
+        totale = row.get("totale_fascicoli", 0)
+        cons = row.get("fascicoli_consegnati", 0)
+        if prevede:
+            return f"Si ({cons}/{totale})"
+        return "No"
+
+    if 'prevede_fascicoli' in libri_cliente.columns:
+        libri_cliente['Fascicoli'] = libri_cliente.apply(_format_fascicoli, axis=1)
+    else:
+        libri_cliente['Fascicoli'] = 'No'
+
     # Separiamo i libri ATTIVI (vendibili/venduti) da quelli di conti GIÀ CHIUSI,
     # cosi risultano ben distinti anche se il cliente ha portato altri libri dopo la chiusura.
     df_attivi = libri_cliente[libri_cliente['stato'].isin(['disponibile', 'venduto'])]
     df_chiusi = libri_cliente[libri_cliente['stato'] == 'chiuso_conto']
 
-    colonne = ['id_libro', 'isbn', 'titolo', 'stato', 'Prezzo Vendita (€)', 'Liquidazione (€)', 'Prezzo di Copertina', 'id_acquirente', 'metodo_pagamento', 'data_vendita', 'operatore']
+    colonne = ['id_libro', 'isbn', 'titolo', 'Fascicoli', 'stato', 'Prezzo Vendita (€)', 'Liquidazione (€)', 'Prezzo di Copertina', 'id_acquirente', 'metodo_pagamento', 'data_vendita', 'operatore']
     colonne = [c for c in colonne if c in libri_cliente.columns]
 
     riga_selezionata = None
@@ -399,27 +418,86 @@ def mostra_pagina():
         else:
             riga_mod = riga_selezionata.to_dict()
             st.markdown(f"**Libro selezionato:** `{riga_mod['id_libro']} - {riga_mod.get('titolo', riga_mod['isbn'])}` (stato: `{riga_mod['stato']}`)")
-            nuovo_prezzo = st.number_input(
-                "Nuovo prezzo di copertina / base (€)",
-                min_value=0.0,
-                value=float(riga_mod.get('prezzo_inserito_mano', 0.0) or riga_mod.get('prezzo_copertina', 0.0)),
-                step=0.10,
-            )
+            
+            col_mod1, col_mod2 = st.columns(2)
+            with col_mod1:
+                nuovo_prezzo = st.number_input(
+                    "Nuovo prezzo di copertina / base (€)",
+                    min_value=0.0,
+                    value=float(riga_mod.get('prezzo_inserito_mano', 0.0) or riga_mod.get('prezzo_copertina', 0.0)),
+                    step=0.10,
+                )
+            with col_mod2:
+                # Modifica stato fascicoli
+                mod_prevede_f = st.checkbox(
+                    "Prevede fascicoli allegati?",
+                    value=bool(riga_mod.get('prevede_fascicoli', False)),
+                    key="mod_prevede_f"
+                )
+            
+            mod_totale_f = int(riga_mod.get('totale_fascicoli', 0))
+            mod_consegnati_f = int(riga_mod.get('fascicoli_consegnati', 0))
+            
+            if mod_prevede_f:
+                col_mod_f1, col_mod_f2 = st.columns(2)
+                with col_mod_f1:
+                    mod_totale_f = st.number_input(
+                        "Fascicoli totali previsti:",
+                        min_value=1,
+                        value=max(1, int(riga_mod.get('totale_fascicoli', 1))),
+                        step=1,
+                        key="mod_totale_f"
+                    )
+                with col_mod_f2:
+                    mod_consegnati_f = st.number_input(
+                        "Fascicoli effettivamente consegnati:",
+                        min_value=0,
+                        max_value=mod_totale_f,
+                        value=min(mod_totale_f, int(riga_mod.get('fascicoli_consegnati', 1) if riga_mod.get('prevede_fascicoli') else mod_totale_f)),
+                        step=1,
+                        key="mod_consegnati_f"
+                    )
+            else:
+                mod_totale_f = 0
+                mod_consegnati_f = 0
             
             # Previene aggiornamenti doppi usando un flag in session_state
             update_key = f"price_update_in_progress_{cliente['id']}"
-            if st.button("💾 Aggiorna prezzo libro", use_container_width=True) and not st.session_state.get(update_key, False):
+            if st.button("💾 Aggiorna dettagli e fascicoli libro", use_container_width=True) and not st.session_state.get(update_key, False):
                 st.session_state[update_key] = True
+                
+                payload_up = {
+                    "prezzo_inserito_mano": nuovo_prezzo,
+                    "prevede_fascicoli": mod_prevede_f,
+                    "totale_fascicoli": mod_totale_f,
+                    "fascicoli_consegnati": mod_consegnati_f
+                }
                 
                 res_up = requests.patch(
                     f"{URL_REST}/copie_libri?id_libro=eq.{riga_mod['id_libro']}",
                     headers=HEADERS,
-                    json={"prezzo_inserito_mano": nuovo_prezzo},
+                    json=payload_up,
                 )
+                
+                # Robustezza Fallback: se le nuove colonne dei fascicoli non esistono ancora, riprova aggiornando solo il prezzo
+                if res_up.status_code >= 400:
+                    payload_up.pop("prevede_fascicoli", None)
+                    payload_up.pop("totale_fascicoli", None)
+                    payload_up.pop("fascicoli_consegnati", None)
+                    res_up = requests.patch(
+                        f"{URL_REST}/copie_libri?id_libro=eq.{riga_mod['id_libro']}",
+                        headers=HEADERS,
+                        json=payload_up,
+                    )
+                
                 if res_up.status_code < 400 and res_up.json():
-                    # Aggiorna il prezzo anche nel DataFrame in memoria PRIMA di rigenerare
-                    # la ricevuta: altrimenti verrebbe ristampata quella col prezzo vecchio.
+                    # Aggiorna il prezzo e i fascicoli anche nel DataFrame in memoria PRIMA di rigenerare
+                    # la ricevuta: altrimenti verrebbe ristampata quella coi dati vecchi.
                     libri_cliente.loc[libri_cliente['id_libro'] == riga_mod['id_libro'], 'prezzo_inserito_mano'] = nuovo_prezzo
+                    if "prevede_fascicoli" in payload_up:
+                        libri_cliente.loc[libri_cliente['id_libro'] == riga_mod['id_libro'], 'prevede_fascicoli'] = mod_prevede_f
+                        libri_cliente.loc[libri_cliente['id_libro'] == riga_mod['id_libro'], 'totale_fascicoli'] = mod_totale_f
+                        libri_cliente.loc[libri_cliente['id_libro'] == riga_mod['id_libro'], 'fascicoli_consegnati'] = mod_consegnati_f
                     # Aggiorna anche il "Prezzo di Copertina" (colonna visibile): quel valore
                     # deriva dal catalogo, quindi lo aggiorniamo in memoria e su catalogo_libri
                     # (per ISBN), cosi la colonna "Prezzo di Copertina" risulta aggiornata.

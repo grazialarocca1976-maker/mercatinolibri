@@ -49,6 +49,7 @@ def _cerca_area_ritiro(filtro_area):
     r = requests.get(f"{URL_REST}/catalogo_libri?or=({filtro_area})&select=isbn,titolo,classi,prezzo_copertina", headers=HEADERS)
     return r.json() if r.status_code == 200 else []
 
+
 PROJECT_ID = "ikugmkhbmyohkdbfupnx"
 URL_REST = f"https://{PROJECT_ID}.supabase.co/rest/v1"
 CHIAVE_SUPABASE = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlrdWdta2hibXlvaGtkYmZ1cG54Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM4NTg3ODYsImV4cCI6MjA5OTQzNDc4Nn0.W0ASwL4tJxwd_ziYXImw0aXdj3RACSGObUd0tjKyN5w"
@@ -62,18 +63,30 @@ HEADERS = {
 
 
 def aggiorna_carrello_ritiro(carrello, libro_selezionato, quantita=1):
-    chiave = (libro_selezionato.get("isbn"), libro_selezionato.get("titolo"))
+    isbn = libro_selezionato.get("isbn")
+    titolo = libro_selezionato.get("titolo")
+    prevede = libro_selezionato.get("prevede_fascicoli", False)
+    totale = libro_selezionato.get("totale_fascicoli", 0)
+    consegnati = libro_selezionato.get("fascicoli_consegnati", 0)
+    
     for item in carrello:
-        if (item.get("isbn"), item.get("titolo")) == chiave:
+        if (item.get("isbn") == isbn and 
+            item.get("titolo") == titolo and 
+            item.get("prevede_fascicoli", False) == prevede and 
+            item.get("totale_fascicoli", 0) == totale and 
+            item.get("fascicoli_consegnati", 0) == consegnati):
             item["prezzo"] = float(item.get("prezzo", 0.0) or 0.0)
             item["quantita"] = int(item.get("quantita", 1) or 1) + int(quantita or 1)
             return carrello
 
     carrello.append({
-        "isbn": libro_selezionato.get("isbn"),
-        "titolo": libro_selezionato.get("titolo"),
+        "isbn": isbn,
+        "titolo": titolo,
         "prezzo": float(libro_selezionato.get("prezzo", 0.0) or 0.0),
         "quantita": int(quantita or 1),
+        "prevede_fascicoli": prevede,
+        "totale_fascicoli": totale,
+        "fascicoli_consegnati": consegnati,
     })
     return carrello
 
@@ -131,10 +144,15 @@ def genera_pdf_ricevuta(dati_cliente, libri_ritirati, numero_ricevuta=None):
         # La liquidazione è il 50% del prezzo di copertina MENO 0,50 € di commissione
         # negozio (voce a sé stante): il venditore riceve 50 cent in meno a libro venduto.
         prezzo_liquidazione = (float(l['prezzo']) / 2) - 0.50
+        titolo_riga = l['titolo'].upper()
+        if l.get("prevede_fascicoli", False):
+            totale_f = l.get("totale_fascicoli", 0) or 0
+            consegnati_f = l.get("fascicoli_consegnati", 0) or 0
+            titolo_riga += f" (FASCICOLI: {consegnati_f}/{totale_f})"
         dati_tabella.append([
             Paragraph(l['etichetta'], stile_cella),
             Paragraph(l['isbn'], stile_cella),
-            Paragraph(l['titolo'].upper(), stile_cella),
+            Paragraph(titolo_riga, stile_cella),
             Paragraph(f"{l['prezzo']:.2f} €", stile_cella),
             Paragraph(f"{prezzo_liquidazione:.2f} €", stile_cella)
         ])
@@ -171,27 +189,42 @@ def genera_pdf_rotolo_etichette(libri_ritirati):
     doc = SimpleDocTemplate(buffer, pagesize=(larghezza_etichetta, altezza_etichetta), rightMargin=5, leftMargin=5, topMargin=5, bottomMargin=5)
     story = []
     styles = getSampleStyleSheet()
-    
+
+    from reportlab.platypus import PageBreak
+
     stile_codice = ParagraphStyle('TermicoCodice', parent=styles['Normal'], fontSize=15, fontName='Helvetica-Bold', alignment=1, leading=17)
     stile_titolo = ParagraphStyle('TermicoTitolo', parent=styles['Normal'], fontSize=8, alignment=1, leading=10, textColor=colors.HexColor("#333333"))
     stile_info = ParagraphStyle('TermicoInfo', parent=styles['Normal'], fontSize=7, alignment=1, leading=9)
+    stile_fascicoli = ParagraphStyle('TermicoFascicoli', parent=styles['Normal'], fontSize=7, alignment=1, leading=9, fontName='Helvetica-Bold', textColor=colors.HexColor("#B00000"))
 
     for i, l in enumerate(libri_ritirati):
+        # Inserisce un'interruzione di pagina PRIMA di ogni etichetta successiva alla prima
+        if i > 0:
+            story.append(PageBreak())
         story.append(Spacer(1, 2))
         story.append(Paragraph(f"<b>{l['etichetta']}</b>", stile_codice))
         story.append(Spacer(1, 2))
+        # Codice identificativo della persona (venditore) — richiesto in stampa
+        cod_persona = l.get('codice_personale', '')
+        if cod_persona:
+            story.append(Paragraph(f"Vend: {cod_persona}", stile_info))
         story.append(Paragraph(f"{l['titolo'][:42].upper()}", stile_titolo))
         story.append(Spacer(1, 1))
         story.append(Paragraph(f"ISBN: {l['isbn']}", stile_info))
+        # Nuova riga per la colonna fascicoli (se il libro prevede fascicoli)
+        if l.get("prevede_fascicoli", False):
+            totale = l.get("totale_fascicoli", 0) or 0
+            consegnati = l.get("fascicoli_consegnati", 0) or 0
+            story.append(Paragraph(f"FASCICOLI: {consegnati}/{totale}", stile_fascicoli))
         story.append(Paragraph("Mercatino Marconi Verona", stile_info))
-        
-        if i < len(libri_ritirati) - 1:
-            from reportlab.platypus import PageBreak
-            story.append(PageBreak())
-            
-            doc.build(story)
-            buffer.seek(0)
-            return buffer.getvalue()
+
+    if not libri_ritirati:
+        # Evita di restituire None in caso di lista vuota
+        story.append(Paragraph("Nessun libro", stile_info))
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
 
 def genera_pdf_inventario_materia(df_totale):
     """Genera un PDF dell'inventario dei libri 'disponibile' (in carico), raggruppati per materia."""
@@ -226,9 +259,14 @@ def genera_pdf_inventario_materia(df_totale):
                 Paragraph("<b>Prezzo Cop.</b>", stile_cella_b),
             ]]
             for _, r in sub.iterrows():
+                titolo_riga = str(r.get('Titolo', r.get('ISBN', ''))).upper()
+                if r.get('prevede_fascicoli', False):
+                    totale_f = int(r.get('totale_fascicoli', 0) or 0)
+                    consegnati_f = int(r.get('fascicoli_consegnati', 0) or 0)
+                    titolo_riga += f" (FASCICOLI: {consegnati_f}/{totale_f})"
                 dati.append([
                     Paragraph(str(r.get('Codice Copertina', '')), stile_cella),
-                    Paragraph(str(r.get('Titolo', r.get('ISBN', ''))).upper(), stile_cella),
+                    Paragraph(titolo_riga, stile_cella),
                     Paragraph(str(r.get('ISBN', '')), stile_cella),
                     Paragraph(f"{float(r.get('Prezzo Copertina (€)', 0.0) or 0.0):.2f} €", stile_cella),
                 ])
@@ -276,11 +314,11 @@ def mostra_pagina():
                     index_venditore = i
                     break
 
-        cliente_selezionato = st.selectbox(
-            "Seleziona il Cliente / Venditore",
+        cliente_selezionato = st.radio(
+            "Seleziona il Cliente / Venditore (elenco completo, clicca con il mouse):",
             chiavi_clienti,
             index=index_venditore,
-            help="Puoi digitare per filtrare l'elenco. La selezione resta memorizzata tra un'operazione e l'altra.",
+            help="Elenco completo dei clienti registrati. Clicca su una riga per selezionare il venditore. La selezione resta memorizzata tra un'operazione e l'altra.",
         )
         dati_cliente = opzioni_clienti[cliente_selezionato]
         st.session_state["id_venditore_corrente"] = dati_cliente["id"]
@@ -294,50 +332,53 @@ def mostra_pagina():
         )
         
         st.markdown("---")
-        modalita_ricerca = st.radio(
-            "Come vuoi cercare il libro nel catalogo adozioni?", 
-            ["🔍 Scansione o Inserimento ISBN (Anche Parziale)", "📖 Cerca per Titolo o Autore", "🏫 Filtra per Classe / Sezione (es. 1AI, 2BE)"], 
-            horizontal=True
-        )
-        
-        libri_trovati = []
-        
-        if modalita_ricerca == "🔍 Scansione o Inserimento ISBN (Anche Parziale)":
-            isbn_input = st.text_input("Digita o scansiona il codice ISBN (Bastano anche poche cifre):").strip()
-            if isbn_input:
-                libri_trovati = _cerca_isbn_ritiro(isbn_input)
-                if not libri_trovati: st.error("❌ Nessun libro trovato con questo frammento di ISBN.")
-                
-        elif modalita_ricerca == "📖 Cerca per Titolo o Autore":
-            testo_ricerca = st.text_input("Digita una parte del titolo o del nome autore:").strip().lower()
-            if len(testo_ricerca) >= 3:
-                libri_trovati = _cerca_testo_ritiro(testo_ricerca)
-                if not libri_trovati: st.error("❌ Nessun volume trovato nel catalogo adozioni.")
-                
-        else:
-            classe_input = st.text_input("Digita la classe e sezione (es. '1AI', '2BE', '3CL'):").strip().upper()
-            
-            if classe_input.startswith("1"):
-                with st.expander("📋 VEDI ELENCO LIBRI IN COMUNE PER MACRO-AREE (CLASSI PRIME)"):
-                    st.write("Seleziona la macro-area per estrarre tutti i libri adottati contemporaneamente dalle sezioni con due lettere:")
-                    area_scelta = st.selectbox("Scegli l'area dei corsi:", ["-- Seleziona Area --", "Area Liceo (1CL, 1DL)", "Area Tecnico (1AI, 1BE, 1CM)", "Area Professionale (1PR, 1MA)"])
-                    
-                    filtro_area = ""
-                    if "Liceo" in area_scelta: filtro_area = "classi=ilike.*1CL*,classi=ilike.*1DL*"
-                    elif "Tecnico" in area_scelta: filtro_area = "classi=ilike.*1AI*,classi=ilike.*1BE*,classi=ilike.*1CM*"
-                    elif "Professionale" in area_scelta: filtro_area = "classi=ilike.*1PR*,classi=ilike.*1MA*"
-                    
-                    if filtro_area:
-                        libri_area_list = _cerca_area_ritiro(filtro_area)
-                        if libri_area_list:
-                            df_area = pd.DataFrame(libri_area_list)
-                            df_area.columns = ['ISBN', 'Titolo Volume Scolastico', 'Classi Adottanti', 'Prezzo (€)']
-                            st.dataframe(df_area, use_container_width=True, hide_index=True)
-                        else: st.info("Nessun libro inserito nel database per questa macro-area.")
+        st.caption("🔍 Scrivi qui sotto: riconosco da solo se e' un ISBN, un titolo/autore o una classe (es. 1AI). Nessun pallino da cliccare.")
+        ricerca_unica = st.text_input(
+            "Cerca per ISBN, Titolo/Autore o Classe (es. 978880... , 'Matematica 1', '1AI'):",
+            key="ricerca_unica_ritiro",
+        ).strip()
 
-            if classe_input:
+        libri_trovati = []
+        if ricerca_unica:
+            # Riconoscimento automatico del tipo di ricerca
+            solo_cifre = ricerca_unica.replace("-", "").replace(" ", "").isdigit()
+            sembra_classe = (
+                len(ricerca_unica) <= 6
+                and any(ch.isdigit() for ch in ricerca_unica)
+                and any(ch.isalpha() for ch in ricerca_unica)
+            )
+            if solo_cifre or (len(ricerca_unica) >= 8 and ricerca_unica.replace("-", "").replace(" ", "").isdigit()):
+                # ISBN / codice numerico
+                libri_trovati = _cerca_isbn_ritiro(ricerca_unica)
+                if not libri_trovati:
+                    st.error("❌ Nessun libro trovato con questo frammento di ISBN.")
+            elif sembra_classe:
+                classe_input = ricerca_unica.upper()
+                if classe_input.startswith("1"):
+                    with st.expander("📋 VEDI ELENCO LIBRI IN COMUNE PER MACRO-AREE (CLASSI PRIME)"):
+                        st.write("Seleziona la macro-area per estrarre tutti i libri adottati contemporaneamente dalle sezioni con due lettere:")
+                        area_scelta = st.selectbox("Scegli l'area dei corsi:", ["-- Seleziona Area --", "Area Liceo (1CL, 1DL)", "Area Tecnico (1AI, 1BE, 1CM)", "Area Professionale (1PR, 1MA)"])
+                        filtro_area = ""
+                        if "Liceo" in area_scelta: filtro_area = "classi=ilike.*1CL*,classi=ilike.*1DL*"
+                        elif "Tecnico" in area_scelta: filtro_area = "classi=ilike.*1AI*,classi=ilike.*1BE*,classi=ilike.*1CM*"
+                        elif "Professionale" in area_scelta: filtro_area = "classi=ilike.*1PR*,classi=ilike.*1MA*"
+                        if filtro_area:
+                            libri_area_list = _cerca_area_ritiro(filtro_area)
+                            if libri_area_list:
+                                df_area = pd.DataFrame(libri_area_list)
+                                df_area.columns = ['ISBN', 'Titolo Volume Scolastico', 'Classi Adottanti', 'Prezzo (€)']
+                                st.dataframe(df_area, use_container_width=True, hide_index=True)
+                            else: st.info("Nessun libro inserito nel database per questa macro-area.")
                 libri_trovati = _cerca_classe_ritiro(classe_input)
                 if not libri_trovati: st.warning(f"Nessun libro censito specificamente per la classe {classe_input}.")
+            else:
+                # Titolo o autore
+                testo = ricerca_unica.lower()
+                if len(testo) >= 3:
+                    libri_trovati = _cerca_testo_ritiro(testo)
+                    if not libri_trovati: st.error("❌ Nessun volume trovato nel catalogo adozioni.")
+                else:
+                    st.info("Digita almeno 3 caratteri per la ricerca per titolo/autore.")
 
         # --- SELEZIONE DEL LIBRO E AGGIUNTA AL CARRELLO ---
         libro_selezionato_dati = None
@@ -357,13 +398,59 @@ def mostra_pagina():
             prezzo_inserito = st.number_input("Inserisci o correggi il Prezzo di Copertina (€)", min_value=0.0, value=prezzo_proposto, step=0.50)
             quantita = st.number_input("Quante copie di questo libro stai prendendo in carico?", min_value=1, value=1)
             
+            # --- SEZIONE GESTIONE FASCICOLI ---
+            # "Ricorda la scelta": se lo stesso libro (ISBN) è già stato ritirato,
+            # pre-compiliamo i campi fascicoli con l'ultima scelta fatta.
+            isbn_corrente = libro_selezionato_dati.get('isbn')
+            if "fascicoli_per_isbn" not in st.session_state:
+                st.session_state["fascicoli_per_isbn"] = {}
+            mem_fasc = st.session_state["fascicoli_per_isbn"].get(isbn_corrente, {})
+
+            st.markdown("##### 📁 Gestione Fascicoli Allegati")
+            prevede_fascicoli = st.checkbox(
+                "Questo testo prevede dei fascicoli allegati?",
+                value=mem_fasc.get("prevede", False),
+                key=f"input_prevede_fascicoli_{isbn_corrente}",
+            )
+            totale_fascicoli = 0
+            fascicoli_consegnati = 0
+            if prevede_fascicoli:
+                col_f1, col_f2 = st.columns(2)
+                with col_f1:
+                    totale_fascicoli = st.number_input(
+                        "Numero totale di fascicoli previsti:",
+                        min_value=1,
+                        value=mem_fasc.get("totale", 1) or 1,
+                        step=1,
+                        key=f"input_totale_fascicoli_{isbn_corrente}",
+                    )
+                with col_f2:
+                    fascicoli_consegnati = st.number_input(
+                        "Numero di fascicoli effettivamente CONSEGNATI:",
+                        min_value=0,
+                        max_value=totale_fascicoli,
+                        value=min(mem_fasc.get("consegnati", totale_fascicoli) or totale_fascicoli, totale_fascicoli),
+                        step=1,
+                        key=f"input_fascicoli_consegnati_{isbn_corrente}",
+                    )
+            
             if st.button("➕ INSERISCI QUESTO TITOLO NEL CARRELLO DI RITIRO", use_container_width=True):
+                # Salva la scelta fascicoli per "ricordarla" alla prossima volta sullo stesso
+                # ISBN (anche se ritirato da persone diverse nella stessa sessione di lavoro)
+                st.session_state["fascicoli_per_isbn"][isbn_corrente] = {
+                    "prevede": prevede_fascicoli,
+                    "totale": totale_fascicoli,
+                    "consegnati": fascicoli_consegnati,
+                }
                 aggiorna_carrello_ritiro(
                     st.session_state["carrello_ritiro"],
                     {
                         "isbn": libro_selezionato_dati['isbn'],
                         "titolo": libro_selezionato_dati['titolo'],
                         "prezzo": prezzo_inserito,
+                        "prevede_fascicoli": prevede_fascicoli,
+                        "totale_fascicoli": totale_fascicoli,
+                        "fascicoli_consegnati": fascicoli_consegnati,
                     },
                     quantita=quantita,
                 )
@@ -394,51 +481,66 @@ def mostra_pagina():
                     with st.spinner("Salvataggio..."):
                         libri_per_ricevuta = []
                         for item in st.session_state["carrello_ritiro"]:
-                            dati_invio = {
-                                "isbn": item['isbn'], 
-                                "id_venditore": dati_cliente['id'], 
-                                "stato": "disponibile", 
-                                "prezzo_inserito_mano": item['prezzo'],
-                                "operatore": st.session_state.get("operatore", "Sconosciuto"),
-                            }
-                            res_ins = requests.post(f"{URL_REST}/copie_libri", headers=HEADERS, json=dati_invio)
-                            # Se la colonna 'operatore' non esiste ancora su copie_libri,
-                            # riprova senza di essa cosi il ritiro continua a funzionare.
-                            if res_ins.status_code >= 400:
-                                dati_invio.pop("operatore", None)
-                                res_ins = requests.post(f"{URL_REST}/copie_libri", headers=HEADERS, json=dati_invio)
-                            if res_ins.status_code < 400:
-                                risposta_server = res_ins.json()
-                                
-                                # BLINDATURA INDICE: Estrazione protetta dell'elemento 0 per evitare il bug list indices
-                                if isinstance(risposta_server, list) and len(risposta_server) > 0:
-                                    dati_copia = risposta_server[0]
-                                else:
-                                    dati_copia = risposta_server
-                                    
-                                id_generato = dati_copia['id_libro']
-                                # Barcode NUMERICO e corto (scansione affidabile): <id_venditore>-<id_libro>
-                                # es. 123-31. L'id_libro e' univoco, quindi la cassa trova il libro
-                                # anche se il prefisso alfabetico non viene letto dallo scanner.
-                                barcode_val = f"{dati_cliente.get('id')}-{id_generato}"
-                                libri_per_ricevuta.append({
-                                    "etichetta": barcode_val,
+                            # Supporto quantità reale: esegue l'inserimento per il numero di copie richiesto
+                            for _ in range(int(item.get("quantita", 1))):
+                                dati_invio = {
                                     "isbn": item['isbn'], 
-                                    "titolo": item['titolo'], 
-                                    "prezzo": item['prezzo'],
-                                    "codice_personale": dati_cliente['codice_personale'],
-                                    "id_venditore": dati_cliente.get('id'),
-                                    "barcode": barcode_val
-                                })
-                                # Salva anche il barcode su DB cosi' la scansione in cassa lo trova direttamente
-                                try:
-                                    requests.patch(
-                                        f"{URL_REST}/copie_libri?id_libro=eq.{id_generato}",
-                                        headers=HEADERS,
-                                        json={"barcode": barcode_val}
-                                    )
-                                except Exception:
-                                    pass
+                                    "id_venditore": dati_cliente['id'], 
+                                    "stato": "disponibile", 
+                                    "prezzo_inserito_mano": item['prezzo'],
+                                    "operatore": st.session_state.get("operatore", "Sconosciuto"),
+                                    "prevede_fascicoli": item.get("prevede_fascicoli", False),
+                                    "totale_fascicoli": int(item.get("totale_fascicoli", 0)),
+                                    "fascicoli_consegnati": int(item.get("fascicoli_consegnati", 0)),
+                                }
+                                res_ins = requests.post(f"{URL_REST}/copie_libri", headers=HEADERS, json=dati_invio)
+                                
+                                # Robustezza Fallback: se la colonna operatore o i campi fascicoli non esistono ancora su DB, riprova escludendoli
+                                if res_ins.status_code >= 400:
+                                    # Rimuoviamo i campi opzionali se il server ha rifiutato la richiesta
+                                    dati_invio.pop("operatore", None)
+                                    dati_invio.pop("prevede_fascicoli", None)
+                                    dati_invio.pop("totale_fascicoli", None)
+                                    dati_invio.pop("fascicoli_consegnati", None)
+                                    res_ins = requests.post(f"{URL_REST}/copie_libri", headers=HEADERS, json=dati_invio)
+                                
+                                if res_ins.status_code < 400:
+                                    risposta_server = res_ins.json()
+                                    
+                                    if isinstance(risposta_server, list) and len(risposta_server) > 0:
+                                        dati_copia = risposta_server[0]
+                                    else:
+                                        dati_copia = risposta_server
+                                        
+                                    id_generato = dati_copia['id_libro']
+                                    barcode_val = f"{dati_cliente.get('id')}-{id_generato}"
+                                    
+                                    # Annotazione dei dettagli dei fascicoli nel titolo per la ricevuta cartacea/PDF
+                                    titolo_completo = item['titolo']
+                                    if item.get("prevede_fascicoli", False):
+                                        titolo_completo += f" (Fascicoli: {item.get('fascicoli_consegnati', 0)}/{item.get('totale_fascicoli', 0)})"
+                                        
+                                    libri_per_ricevuta.append({
+                                        "etichetta": barcode_val,
+                                        "isbn": item['isbn'], 
+                                        "titolo": titolo_completo, 
+                                        "prezzo": item['prezzo'],
+                                        "codice_personale": dati_cliente['codice_personale'],
+                                        "id_venditore": dati_cliente.get('id'),
+                                        "barcode": barcode_val,
+                                        "prevede_fascicoli": item.get("prevede_fascicoli", False),
+                                        "totale_fascicoli": item.get("totale_fascicoli", 0),
+                                        "fascicoli_consegnati": item.get("fascicoli_consegnati", 0)
+                                    })
+                                    
+                                    try:
+                                        requests.patch(
+                                            f"{URL_REST}/copie_libri?id_libro=eq.{id_generato}",
+                                            headers=HEADERS,
+                                            json={"barcode": barcode_val}
+                                        )
+                                    except Exception:
+                                        pass
                         
                         if libri_per_ricevuta:
                             # Numero progressivo per tipo ritiro: N/R
@@ -480,20 +582,26 @@ def mostra_pagina():
             col_pdf_f, col_pdf_et = st.columns(2)
             with col_pdf_f:
                 pdf_f_data = genera_pdf_ricevuta(dati_cliente, st.session_state["libri_appena_salvati"], st.session_state.get("numero_ricevuta_ritiro_corrente"))
-                st.download_button(label="📄 SCARICA RICEVUTA COMPLETA A4", data=pdf_f_data, file_name="ricevuta_marconi.pdf", mime="application/pdf", use_container_width=True)
-                op_nome = st.session_state.get("operatore", "anon").lower()
-                pubblica_ricevuta_online(
-                    st,
-                    pdf_f_data,
-                    "ritiro",
-                    dati_cliente,
-                    data_riferimento=datetime.date.today().strftime("%Y-%m-%d"),
-                    suffisso=f"op-{op_nome}-{len(st.session_state['libri_appena_salvati'])}-libri"
-                )
+                if pdf_f_data is None:
+                    st.error("⚠️ Impossibile generare il PDF della ricevuta.")
+                else:
+                    st.download_button(label="📄 SCARICA RICEVUTA COMPLETA A4", data=pdf_f_data, file_name="ricevuta_marconi.pdf", mime="application/pdf", use_container_width=True)
+                    op_nome = st.session_state.get("operatore", "anon").lower()
+                    pubblica_ricevuta_online(
+                        st,
+                        pdf_f_data,
+                        "ritiro",
+                        dati_cliente,
+                        data_riferimento=datetime.date.today().strftime("%Y-%m-%d"),
+                        suffisso=f"op-{op_nome}-{len(st.session_state['libri_appena_salvati'])}-libri"
+                    )
                 
             with col_pdf_et:
                 pdf_et_data = genera_pdf_rotolo_etichette(st.session_state["libri_appena_salvati"])
-                st.download_button(label="🖨️ SCARICA ETICHETTE ADESIVE (TM-L90)", data=pdf_et_data, file_name="rotolo_etichette_marconi.pdf", mime="application/pdf", use_container_width=True)
+                if pdf_et_data is None:
+                    st.error("⚠️ Impossibile generare il PDF delle etichette.")
+                else:
+                    st.download_button(label="🖨️ SCARICA ETICHETTE ADESIVE (TM-L90)", data=pdf_et_data, file_name="rotolo_etichette_marconi.pdf", mime="application/pdf", use_container_width=True)
 
             st.markdown("---")
             st.write("Stampa subito le etichette con uno dei due metodi disponibili:")
@@ -507,32 +615,56 @@ def mostra_pagina():
 
             col_a4, col_tm = st.columns(2)
             with col_a4:
+                st.markdown("**Layout etichette A4 (per stampa manuale su un'altra stampante)**")
                 layout_scelto = st.selectbox(
-                    "Seleziona il layout delle etichette A4:",
-                    ["Standard (3x8)", "A5 compatibile (2x4)", "Risparmio 10 etichette (2x5)"],
+                    "Scegli il layout:",
+                    ["Standard (3x8)", "A5 compatibile (2x4)", "Risparmio 10 etichette (2x5)", "Personalizzato (dimensioni foglio + n. etichette)"],
                     index=0,
-                    help="Se la tua stampante non trova le etichette, prova il layout compatibile A5 o modifica le misure. Il layout 'Risparmio 10' usa solo 10 etichette per foglio.",
+                    help="Se la tua stampante non trova le etichette, prova il layout compatibile A5, il risparmio 10 o il layout personalizzato inserendo le misure del tuo foglio.",
                 )
-                
+
+                layout = None
+                max_etichette = 24
+                if layout_scelto == "Standard (3x8)":
+                    layout = None
+                    max_etichette = 24
+                elif layout_scelto == "A5 compatibile (2x4)":
+                    layout = "a5"
+                    max_etichette = 8
+                elif layout_scelto == "Risparmio 10 etichette (2x5)":
+                    layout = "10"
+                    max_etichette = 10
+                else:
+                    # Layout personalizzato: l'utente inserisce foglio + totale etichette
+                    c_f1, c_f2 = st.columns(2)
+                    with c_f1:
+                        foglio_l = st.number_input("Larghezza foglio (mm)", min_value=50.0, max_value=500.0, value=210.0, step=1.0)
+                        foglio_h = st.number_input("Altezza foglio (mm)", min_value=50.0, max_value=500.0, value=297.0, step=1.0)
+                    with c_f2:
+                        tot_etichette = st.number_input("Numero TOTALE etichette sul foglio", min_value=1, max_value=400, value=24, step=1)
+                    # Calcola automaticamente colonne/righe e dimensione etichetta
+                    try:
+                        import gestore_etichette as ge
+                        importlib.reload(ge)
+                        layout = ge.calcola_layout_personalizzato(foglio_l, foglio_h, tot_etichette)
+                        max_etichette = tot_etichette
+                        st.caption(f"Calcolato: {layout['colonne']} colonne x {layout['righe']} righe | etichetta {layout['larghezza_etichetta_mm']:.0f}x{layout['altezza_etichetta_mm']:.0f} mm")
+                    except Exception as e:
+                        st.error(f"Errore calcolo layout: {e}")
+                        layout = None
+
                 # Soluzione antispreco: posizione di partenza
-                max_etichette = 24 if layout_scelto == "Standard (3x8)" else (8 if layout_scelto == "A5 compatibile (2x4)" else 10)
                 etichetta_partenza = st.number_input(
-                    "♻️ Posizione di partenza (Soluzione Antispreco):",
+                    "♫️ Posizione di partenza (Soluzione Antispreco):",
                     min_value=1,
                     max_value=max_etichette,
                     value=1,
-                    help="Se hai un foglio parzialmente usato, inserisci il numero dell'etichetta libera da cui vuoi far partire la stampa (es. se le prime 10 sono già state staccate, inserisci 11). Le etichette precedenti sul foglio verranno lasciate vuote."
+                    help="Se hai un foglio parzialmente usato, inserisci il numero dell'etichetta libera da cui vuoi far partire la stampa (es. se le prime 10 sono gia' state staccate, inserisci 11). Le etichette precedenti sul foglio verranno lasciate vuote."
                 )
                 start_idx = etichetta_partenza - 1
 
                 # Pulsante per scaricare il PDF (genera bytes in memoria)
                 if st.button("⬇️ SCARICA PDF ETICHETTE (PER STAMPA MANUALE)", use_container_width=True):
-                    if layout_scelto == "Standard (3x8)":
-                        layout = None
-                    elif layout_scelto == "A5 compatibile (2x4)":
-                        layout = "a5"
-                    else:
-                        layout = "10"
                     pdf_bytes = None
                     try:
                         import gestore_etichette as ge
@@ -545,9 +677,14 @@ def mostra_pagina():
                         st.error(f"Errore generazione PDF in memoria: {e}")
 
                     if pdf_bytes:
-                        st.download_button(label="⬇️ Scarica PDF etichette", data=pdf_bytes, file_name="etichette_a4_marconi.pdf", mime="application/pdf", use_container_width=True)
+                        st.session_state["pdf_etichette_a4"] = pdf_bytes
                     else:
+                        st.session_state["pdf_etichette_a4"] = None
                         st.warning("Impossibile generare il PDF in memoria; prova a usare il pulsante di stampa per creare il file sul server.")
+
+                # Il download button vive fuori dal blocco del button per non scomparire al rerun
+                if st.session_state.get("pdf_etichette_a4"):
+                    st.download_button(label="⬇️ Scarica PDF etichette", data=st.session_state["pdf_etichette_a4"], file_name="etichette_a4_marconi.pdf", mime="application/pdf", use_container_width=True)
 
             with col_tm:
                 if st.button("🖨️ STAMPA SULL'ETICHETTRICE TM-L90", use_container_width=True):
@@ -657,6 +794,9 @@ def mostra_pagina():
                             "codice_personale": codice_p,
                             "id_venditore": r.get('id_venditore'),
                             "barcode": f"{r.get('id_venditore')}-{id_l}",
+                            "prevede_fascicoli": bool(r.get('prevede_fascicoli', False)),
+                            "totale_fascicoli": int(r.get('totale_fascicoli', 0) or 0),
+                            "fascicoli_consegnati": int(r.get('fascicoli_consegnati', 0) or 0),
                         })
                     pdf_bytes = None
                     try:
@@ -669,12 +809,17 @@ def mostra_pagina():
                     except Exception as e:
                         st.error(f"Errore generazione PDF etichette: {e}")
                     if pdf_bytes:
-                        st.download_button(
-                            label=f"⬇️ SCARICA PDF ETICHETTE ({len(libri_per_etichette)} etichette)",
-                            data=pdf_bytes,
-                            file_name="etichette_ristampa.pdf",
-                            mime="application/pdf",
-                            use_container_width=True,
-                        )
+                        st.session_state["pdf_etichette_ristampa"] = pdf_bytes
                     else:
+                        st.session_state["pdf_etichette_ristampa"] = None
                         st.warning("Impossibile generare il PDF delle etichette.")
+
+                # Il download button vive fuori dal blocco del button per non scomparire al rerun
+                if st.session_state.get("pdf_etichette_ristampa"):
+                    st.download_button(
+                        label=f"⬇️ SCARICA PDF ETICHETTE ({len(libri_per_etichette)} etichette)",
+                        data=st.session_state["pdf_etichette_ristampa"],
+                        file_name="etichette_ristampa.pdf",
+                        mime="application/pdf",
+                        use_container_width=True,
+                    )

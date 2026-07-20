@@ -141,6 +141,15 @@ def mostra_pagina():
             st.markdown(f"**🆔 ISBN:** {copia_selezionata['isbn']}")
             st.markdown(f"**📊 Stato Attuale:** `{copia_selezionata['stato'].upper()}`")
             
+            # Mostra dettagli fascicoli se presenti
+            prevede_f = copia_selezionata.get("prevede_fascicoli", False)
+            totale_f = copia_selezionata.get("totale_fascicoli", 0)
+            cons_f = copia_selezionata.get("fascicoli_consegnati", 0)
+            if prevede_f:
+                st.markdown(f"**📁 Fascicoli Allegati:** `SÌ` ({cons_f}/{totale_f} consegnati)")
+            else:
+                st.markdown(f"**📁 Fascicoli Allegati:** `NO`")
+            
         with col_inf2:
             st.markdown("#### 👤 Informazioni Venditore")
             if 'vend_nome' in copia_selezionata and pd.notna(copia_selezionata['vend_nome']):

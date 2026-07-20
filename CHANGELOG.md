@@ -4,6 +4,48 @@
 
 Tutte le modifiche significative al progetto vengono documentate in questo file.
 
+## 2026-07-20 — Fascicoli: gestione, stampa, ricerca unificata e test
+
+### Ritiro Libri (Venditori)
+- **Ricerca unificata (niente più pallini)**: sostituito il `radio` con 3 modalità (ISBN / Titolo / Classe) con un UNICO campo di testo che riconosce automaticamente se hai scritto un ISBN (anche parziale), un titolo/autore o una classe (es. `1AI`), mostrando l'aiuto contestuale (`ritiro.py`).
+- **Fix crash stampa etichette rotolo TM-L90**: `genera_pdf_rotolo_etichette` ora ritorna SEMPRE bytes PDF validi (prima, con un solo libro, ritornava `None` dentro il ciclo → `StreamlitAPIException: Invalid binary data format: NoneType`). Aggiunto anche controllo difensivo `if pdf_et_data is None` prima di `st.download_button`. Inserita l'interruzione di pagina PRIMA di ogni etichetta (più robusto) e una riga "Nessun libro" se la lista è vuota (`ritiro.py`).
+- **Memoria scelta fascicoli per ISBN**: se lo STESSO ISBN viene ritirato 2-3 volte (anche da persone/venditori diversi nella stessa sessione di lavoro), i campi fascicoli vengono pre-compilati con l'ultima scelta fatta (`st.session_state["fascicoli_per_isbn"]`, chiavi dinamiche per ISBN) (`ritiro.py`).
+- **Codice identificativo della persona sulle etichette**: aggiunto `Vend: <codice_personale>` (es. `BOR85RW0001`) su etichette rotolo TM-L90 — prima mancava il codice del venditore (mostrava solo `id_venditore-id_libro`). `prepara_dati_etichette` ora include `codice_personale` (`ritiro.py`, `gestore_etichette.py`).
+- **Fascicoli su TUTTI i tipi di stampa**: ora i fascicoli compaiono anche nella ricevuta di ritiro A4 (`(FASCICOLI: X/Y)` nel titolo) e nell'inventario per materia A4 (`genera_pdf_ricevuta`, `genera_pdf_inventario_materia`). Erano già presenti su etichette rotolo TM-L90, etichette A4 (bytes/file), anteprima e ricevuta vendita cassa.
+- **Quantità reale nel carrello**: l'inserimento in DB ora esegue un ciclo sulle copie richieste (`quantita`), cosi più copie dello stesso libro creano righe distinte (`ritiro.py`).
+- **Layout etichette A4 personalizzato**: nuovo `calcola_layout_personalizzato(foglio_l, foglio_h, totale_etichette)` che calcola automaticamente colonne/righe e dimensioni etichetta; aggiunta la voce "Personalizzato" nel `selectbox` dei layout (`ritiro.py`, `gestore_etichette.py`).
+- **Download button etichette non scompare al rerun**: i `st.download_button` di A4 e ristampa ora vivono fuori dal blocco del pulsante (salvati in `st.session_state`), cosi restano visibili dopo il `st.rerun()` (`ritiro.py`).
+
+### Cassa e Vendita Rapida
+- **Ricerca unificata (niente più pallini)**: sostituito il `radio` (Numero / Codice venditore / Barcode) con un UNICO campo che riconosce da solo numero copertina, codice venditore (es. `BOR85RW0001`) o codice a barre, con warning chiari se il libro non è disponibile (`cassa.py`).
+- **Sconto 4€ su fascicoli incompleti**: se un libro prevede fascicoli e quelli consegnati sono < totali, avviso chiaro + checkbox "cliente accetta sconto di 4,00 €". Vendita bloccata se incompleti e sconto non accettato. Il prezzo vendita = (prezzo_base − sconto) / 2 (`cassa.py`).
+- **Helper puro `calcola_prezzo_vendita_scontato(prezzo_base, sconto_fascicoli=0.0)`** estratto dal flusso per testabilità (`cassa.py`).
+
+### Gestione Conti Cliente
+- **Colonna "Fascicoli" nella tabella**: mostra `Sì (X/Y)` o `No` per ogni libro, calcolata dai campi `prevede_fascicoli`/`totale_fascicoli`/`fascicoli_consegnati` (`gestione_conti.py`).
+- **Modifica fascicoli nella "Correggi prezzo"**: ora oltre al prezzo si può spuntare "Prevede fascicoli" e impostare totale/consegnati; l'aggiornamento fa PATCH su `copie_libri` con fallback (se le nuove colonne non esistono ancora, riprova aggiornando solo il prezzo) (`gestione_conti.py`).
+- **Fascicoli nella ricevuta di ritiro rigenerata**: `_rigenera_ricevuta_ritiro_completa` annota `(Fascicoli: X/Y)` nel titolo (`gestione_conti.py`).
+
+### Cerca Libro (Archivio)
+- **Dettagli fascicoli**: nella scheda del libro trovato ora compare `📁 Fascicoli Allegati: SÌ (X/Y)` o `NO` (`cerca_libro.py`).
+
+### Registrazione Clienti
+- **Elenco "Clienti già registrati" cliccabile**: nuovo `expander` con `radio` di TUTTI i clienti; la selezione si sincronizza istantaneamente col `selectbox` del tab "Cerca" (senza ricaricare la pagina) (`clienti.py`).
+
+### Gestore Etichette
+- **Campi fascicoli in `prepara_dati_etichette`**: ora normalizza `prevede_fascicoli`, `totale_fascicoli`, `fascicoli_consegnati` e include `codice_personale` (`gestore_etichette.py`).
+- **Fascicoli su etichette A4 (bytes e file) e anteprima**: `genera_griglia_a4_bytes`, `genera_griglia_a4` e `genera_preview_etichette` mostrano `FASC: X/Y` quando il libro prevede fascicoli. Disegno etichette A4 rifattorizzato in `_disegna_etichetta_a4` (più leggibile, niente sovrapposizioni) (`gestore_etichette.py`).
+- **Fascicoli su stampa TM-L90 diretta**: `stampa_singola_tml90` / `stampa_etichette_tm_l90` stampano `Fascicoli: X/Y`; barcode ingrandito (width 3, height 70) (`gestore_etichette.py`).
+- **Layout personalizzato**: `calcola_layout_personalizzato` supporta fogli e numeri di etichette arbitrari, con scala dei font proporzionale (`gestore_etichette.py`).
+
+### Database (SQL)
+- **`crea_colonne_fascicoli.sql`** (nuovo): script per aggiungere le colonne `prevede_fascicoli`, `totale_fascicoli`, `fascicoli_consegnati` a `copie_libri` su Supabase. I moduli fanno fallback se le colonne non esistono ancora (`crea_colonne_fascicoli.sql`).
+
+### Test automatici (pytest)
+- **`tests/test_gestore_etichette.py`** (esteso): `prepara_dati_etichette` include i campi fascicoli; `genera_preview_etichette` mostra `FASC: X/Y`; `genera_griglia_a4_bytes` genera PDF valido con fascicoli; `stampa_etichette_tm_l90` passa i fascicoli alla stampante (mock `Usb`).
+- **`tests/test_ritiro_etichette.py`** (nuovo): `genera_pdf_rotolo_etichette` non ritorna `None` (1 libro, lista vuota) e genera PDF valido con fascicoli.
+- **`tests/test_cassa_fascicoli.py`** (nuovo): `calcola_prezzo_vendita_scontato` con/senza sconto 4€, non negativo, prezzo zero.
+
 ## 2026-07-19 — v2.1.0 (Versione Corrente)
 
 ### Interfaccia e navigazione

@@ -108,6 +108,27 @@ def mostra_pagina():
             else:
                 st.warning("⚠️ I campi Nome, Cognome, Numero di Telefono e Indirizzo Email sono tutti obbligatori.")
 
+    # --- 1A. LISTA COMPLETA CLIENTI GIÀ REGISTRATI (cliccabile, senza passare dal tab Cerca) ---
+    with st.expander("👥 Clienti gia' registrati (clicca per selezionarne uno)", expanded=False):
+        if not clienti_list:
+            st.info("Nessun cliente registrato nel database.")
+        else:
+            mappa_lista = {f"{c['id']} - {c['cognome']} {c['nome']} ({c['codice_personale']})": c for c in clienti_list}
+            scelta_lista = st.radio(
+                "Seleziona un cliente esistente:",
+                list(mappa_lista.keys()),
+                key="lista_clienti_registrati_radio",
+                help="Elenco completo cliccabile. La selezione qui aggiorna istantaneamente il cliente selezionato sopra.",
+            )
+            if scelta_lista:
+                cliente_lista = mappa_lista[scelta_lista]
+                st.success(f"👤 {cliente_lista['cognome']} {cliente_lista['nome']} | Codice: {cliente_lista['codice_personale']} | Tel: {cliente_lista.get('telefono','N.D.')}")
+                # Quando si seleziona un cliente qui, aggiorniamo lo stato condiviso in modo che il
+                # selectbox del tab "Cerca" (chiave sel_cliente_cerca_widget) rifletta istantaneamente
+                # la scelta fatta sul radio, senza bisogno di ricaricare la pagina.
+                st.session_state["valore_cliente_cerca"] = scelta_lista
+                st.session_state["sel_cliente_cerca_widget"] = scelta_lista
+
     # --- 1B. SCHERMATA CERCA CLIENTE ESISTENTE (flusso guidato VENDITA/RITIRO) ---
     with tab_cerca:
         st.subheader("🔍 Cerca un cliente già registrato")
@@ -129,8 +150,38 @@ def mostra_pagina():
                 st.info("Nessun cliente corrisponde alla ricerca.")
             else:
                 mappa_cerca = {f"{c['id']} - {c['cognome']} {c['nome']} ({c['codice_personale']})": c for c in risultati}
-                scelta_cerca = st.selectbox("Seleziona il cliente trovato", list(mappa_cerca.keys()), key="sel_cliente_cerca")
-                cliente_trovato = mappa_cerca[scelta_cerca]
+                opzioni_cerca = list(mappa_cerca.keys())
+                
+                # Sincronizza lo stato se è stato selezionato dall'expander Clienti già registrati
+                valore_selezionato = st.session_state.get("valore_cliente_cerca", "")
+                if valore_selezionato not in opzioni_cerca:
+                    # Se non è presente nelle opzioni filtrate attuale, ma è nella lista globale dei clienti registrati,
+                    # e l'utente ha cliccato sul radio, possiamo temporaneamente inserirlo o azzerare il filtro
+                    if valore_selezionato in mappa_lista:
+                        # Selezionato via radio ma nascosto dal filtro: allarghiamo le opzioni per includerlo
+                        opzioni_cerca.append(valore_selezionato)
+                        mappa_cerca[valore_selezionato] = mappa_lista[valore_selezionato]
+                
+                if "valore_cliente_cerca" not in st.session_state or not st.session_state["valore_cliente_cerca"]:
+                    st.session_state["valore_cliente_cerca"] = opzioni_cerca[0] if opzioni_cerca else ""
+                
+                if st.session_state["valore_cliente_cerca"] not in opzioni_cerca and opzioni_cerca:
+                    st.session_state["valore_cliente_cerca"] = opzioni_cerca[0]
+                    
+                idx_default = opzioni_cerca.index(st.session_state["valore_cliente_cerca"]) if st.session_state["valore_cliente_cerca"] in opzioni_cerca else 0
+                
+                scelta_cerca = st.selectbox(
+                    "Seleziona il cliente trovato", 
+                    opzioni_cerca, 
+                    index=idx_default,
+                    key="sel_cliente_cerca_widget"
+                )
+                
+                # Aggiorna lo stato sul cambiamento
+                if scelta_cerca:
+                    st.session_state["valore_cliente_cerca"] = scelta_cerca
+                    
+                cliente_trovato = mappa_cerca[st.session_state["valore_cliente_cerca"]]
                 st.success(f"✅ Cliente selezionato: **{cliente_trovato['cognome']} {cliente_trovato['nome']}** (Codice: {cliente_trovato['codice_personale']})")
                 if st.button("➡️ VAI A VENDITA / RITIRO CON QUESTO CLIENTE", use_container_width=True):
                     cid = int(cliente_trovato['id'])
@@ -141,6 +192,8 @@ def mostra_pagina():
                         st.session_state["id_venditore_corrente"] = cid
                     st.session_state["pagina"] = st.session_state["destinazione_dopo_cliente"]
                     st.session_state["destinazione_dopo_cliente"] = None
+                    if "valore_cliente_cerca" in st.session_state:
+                        del st.session_state["valore_cliente_cerca"]
                     st.rerun()
 
     # --- 2. SCHERMATA MODIFICA E VARIAZIONE ---
