@@ -218,6 +218,10 @@ HEADERS = {
     "Authorization": f"Bearer {CHIAVE_SUPABASE}",
     "Content-Type": "application/json"
 }
+# ⬇️ INSERISCI QUESTE DUE RIGHE PROPRIO QUI! ⬇️
+st.session_state["HEADERS"] = HEADERS
+st.session_state["URL_REST"] = URL_REST
+
 
 PASSWORD_AMMINISTRATORE = st.secrets.get("password_admin", "Marconi2026")
 

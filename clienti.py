@@ -22,7 +22,7 @@ def mostra_pagina():
     # si viene rimandati automaticamente alla pagina di destinazione (cassa o ritiro).
     destinazione = st.session_state.get("destinazione_dopo_cliente", None)
     if destinazione:
-        st.info(f"🔄 Flusso **{'VENDITA' if destinazione.startswith('Cassa') else 'RITIRO'}**: registra o cerca il cliente, poi procederai automaticamente a **{destinazione}**.")
+        st.info(f"🔄 Flusso {'VENDITA' if destinazione.startswith('Cassa') else 'RITIRO'}: registra o cerca il cliente, poi procederai automaticamente a **{destinazione}**.")
 
     # Carichiamo l'elenco clienti una sola volta (serve sia per Modifica che per il tabellone)
     res_c = requests.get(f"{URL_REST}/clienti?select=*&order=id.asc", headers=HEADERS)
@@ -30,7 +30,7 @@ def mostra_pagina():
 
     tab_registra, tab_cerca, tab_modifica = st.tabs(["➕ Registra Nuovo Cliente", "🔍 Cerca Cliente Esistente", "✏️ Modifica o Elimina Cliente"])
 
-    # --- 1. SCHERMATA REGISTRAZIONE CON CONTROLLO DOPPIONI ---
+    # ------------------- 1. SCHERMATA REGISTRAZIONE CON CONTROLLO DOPPIONI -------------------
     with tab_registra:
         st.subheader("Inserisci un nuovo cliente")
 
@@ -46,6 +46,7 @@ def mostra_pagina():
             email = st.text_input("Indirizzo Email", key="ins_email").strip().lower()
 
         st.write("")
+
         if st.button("💾 Salva Nuovo Cliente"):
             if nome and cognome and telefono and email:
                 with st.spinner("Verifica duplicati in corso..."):
@@ -82,34 +83,80 @@ def mostra_pagina():
                         except Exception:
                             next_id_seq = 1
 
-                        codice_finale = f"{codice_automatico}{next_id_seq:04d}"
+                        # Genera il codice provvisorio
+                        codice_provvisorio = f"{codice_automatico}{next_id_seq:04d}"
+
+                        # Verifica che il codice non esista già nel database (per evitare doppioni rari)
+                        res_check = requests.get(
+                            f"{URL_REST}/clienti?codice_personale=eq.{codice_provvisorio}",
+                            headers=HEADERS,
+                        )
+                        if (
+                            res_check.status_code == 200
+                            and res_check.json()
+                        ):
+                            # Se il codice esiste già, incrementa il suffisso numerico finché non troviamo uno libero
+                            while True:
+                                next_id_seq += 1
+                                codice_provvisorio = f"{codice_automatico}{next_id_seq:04d}"
+                                res_check = requests.get(
+                                    f"{URL_REST}/clienti?codice_personale=eq.{codice_provvisorio}",
+                                    headers=HEADERS,
+                                )
+                                if (
+                                    res_check.status_code != 200
+                                    or not res_check.json()
+                                ):
+                                    break
+                            codice_finale = codice_provvisorio
+                        else:
+                            codice_finale = codice_provvisorio
 
                         nuovo_cliente = {
                             "codice_personale": codice_finale,
                             "nome": nome,
                             "cognome": cognome,
                             "telefono": telefono,
-                            "email": email
+                            "email": email,
                         }
-                        res = requests.post(f"{URL_REST}/clienti", headers=HEADERS, json=nuovo_cliente)
+                        res = requests.post(
+                            f"{URL_REST}/clienti",
+                            headers=HEADERS,
+                            json=nuovo_cliente,
+                        )
                         if res.status_code < 400:
-                            st.success(f"🎉 Cliente {nome} {cognome} registrato con successo! Codice cliente: {codice_finale}")
+                            st.success(
+                                f"🎉 Cliente {nome} {cognome} registrato con successo! "
+                                f"Codice cliente: {codice_finale}"
+                            )
                             if "lettere_casuali_correnti" in st.session_state:
                                 del st.session_state["lettere_casuali_correnti"]
                             # Se arriviamo dal flusso guidato, imposta il cliente e vai alla destinazione
                             if st.session_state.get("destinazione_dopo_cliente"):
-                                st.session_state["id_venditore_corrente"] = int(res.json()[0]["id"]) if res.json() else None
-                                st.session_state["id_acquirente_corrente"] = int(res.json()[0]["id"]) if res.json() else None
-                                st.session_state["pagina"] = st.session_state["destinazione_dopo_cliente"]
+                                st.session_state["id_venditore_corrente"] = int(
+                                    res.json()[0]["id"]
+                                ) if res.json() else None
+                                st.session_state["id_acquirente_corrente"] = int(
+                                    res.json()[0]["id"]
+                                ) if res.json() else None
+                                st.session_state["pagina"] = (
+                                    st.session_state["destinazione_dopo_cliente"]
+                                )
                                 st.session_state["destinazione_dopo_cliente"] = None
+                            if "valore_cliente_cerca" in st.session_state:
+                                del st.session_state["valore_cliente_cerca"]
                             st.rerun()
                         else:
-                            st.error("Errore nel salvataggio online. Il codice generato potrebbe essere un doppione raro, riprova.")
-            else:
-                st.warning("⚠️ I campi Nome, Cognome, Numero di Telefono e Indirizzo Email sono tutti obbligatori.")
+                            st.error(
+                                "Errore nel salvataggio online. Il codice generato potrebbe essere un doppione raro, riprova."
+                            )
+                    else:
+                        st.warning(
+                            "⚠️ I campi Nome, Cognome, Numero di Telefono e Indirizzo Email sono tutti obbligatori."
+                        )
 
-    # --- 1A. LISTA COMPLETA CLIENTI GIÀ REGISTRATI (cliccabile, senza passare dal tab Cerca) ---
-    with st.expander("👥 Clienti gia' registrati (clicca per selezionarne uno)", expanded=False):
+    # ------------------- 1A. LISTA COMPLETA CLIENTI GIÀ REGISTRATI (cliccabile, senza passare dal tab Cerca) -------------------
+    with st.expander("👥 Clienti già registrati (clicca per selezionarne uno)", expanded=True):
         if not clienti_list:
             st.info("Nessun cliente registrato nel database.")
         else:
@@ -122,36 +169,47 @@ def mostra_pagina():
             )
             if scelta_lista:
                 cliente_lista = mappa_lista[scelta_lista]
-                st.success(f"👤 {cliente_lista['cognome']} {cliente_lista['nome']} | Codice: {cliente_lista['codice_personale']} | Tel: {cliente_lista.get('telefono','N.D.')}")
+                st.success(
+                    f"👤 {cliente_lista['cognome']} {cliente_lista['nome']} | "
+                    f"Codice: {cliente_lista['codice_personale']} | "
+                    f"Tel: {cliente_lista.get('telefono', 'N.D.')}"
+                )
                 # Quando si seleziona un cliente qui, aggiorniamo lo stato condiviso in modo che il
                 # selectbox del tab "Cerca" (chiave sel_cliente_cerca_widget) rifletta istantaneamente
                 # la scelta fatta sul radio, senza bisogno di ricaricare la pagina.
                 st.session_state["valore_cliente_cerca"] = scelta_lista
                 st.session_state["sel_cliente_cerca_widget"] = scelta_lista
 
-    # --- 1B. SCHERMATA CERCA CLIENTE ESISTENTE (flusso guidato VENDITA/RITIRO) ---
+    # ------------------- 1B. SCHERMATA CERCA CLIENTE ESISTENTE (flusso guidato VENDITA/RITIRO) -------------------
     with tab_cerca:
         st.subheader("🔍 Cerca un cliente già registrato")
         if not clienti_list:
             st.info("Nessun cliente registrato nel database.")
         else:
             # Filtro di ricerca libero (nome, cognome, telefono, email, codice)
-            filtro = st.text_input("Scrivi Nome, Cognome, Telefono, Email o Codice cliente", key="cerca_cliente_testo").strip().lower()
+            filtro = st.text_input(
+                "Scrivi Nome, Cognome, Telefono, Email o Codice cliente", key="cerca_cliente_testo"
+            ).strip().lower()
             risultati = clienti_list
             if filtro:
                 risultati = [
-                    c for c in clienti_list
-                    if filtro in (c.get('nome', '') + ' ' + c.get('cognome', '')).lower()
-                    or filtro in str(c.get('telefono', '')).lower()
-                    or filtro in (c.get('email', '') or '').lower()
-                    or filtro in (c.get('codice_personale', '') or '').lower()
+                    c
+                    for c in clienti_list
+                    if filtro in (c.get("nome", "") + " " + c.get("cognome", ""))
+                    .lower()
+                    or filtro in str(c.get("telefono", ""))
+                    .lower()
+                    or filtro in (c.get("email", "") or "")
+                    .lower()
+                    or filtro in (c.get("codice_personale", "") or "")
+                    .lower()
                 ]
             if not risultati:
                 st.info("Nessun cliente corrisponde alla ricerca.")
             else:
                 mappa_cerca = {f"{c['id']} - {c['cognome']} {c['nome']} ({c['codice_personale']})": c for c in risultati}
                 opzioni_cerca = list(mappa_cerca.keys())
-                
+
                 # Sincronizza lo stato se è stato selezionato dall'expander Clienti già registrati
                 valore_selezionato = st.session_state.get("valore_cliente_cerca", "")
                 if valore_selezionato not in opzioni_cerca:
@@ -161,42 +219,58 @@ def mostra_pagina():
                         # Selezionato via radio ma nascosto dal filtro: allarghiamo le opzioni per includerlo
                         opzioni_cerca.append(valore_selezionato)
                         mappa_cerca[valore_selezionato] = mappa_lista[valore_selezionato]
-                
+
                 if "valore_cliente_cerca" not in st.session_state or not st.session_state["valore_cliente_cerca"]:
                     st.session_state["valore_cliente_cerca"] = opzioni_cerca[0] if opzioni_cerca else ""
-                
+
                 if st.session_state["valore_cliente_cerca"] not in opzioni_cerca and opzioni_cerca:
                     st.session_state["valore_cliente_cerca"] = opzioni_cerca[0]
-                    
-                idx_default = opzioni_cerca.index(st.session_state["valore_cliente_cerca"]) if st.session_state["valore_cliente_cerca"] in opzioni_cerca else 0
-                
-                scelta_cerca = st.selectbox(
-                    "Seleziona il cliente trovato", 
-                    opzioni_cerca, 
-                    index=idx_default,
-                    key="sel_cliente_cerca_widget"
+
+                idx_default = (
+                    opzioni_cerca.index(st.session_state["valore_cliente_cerca"])
+                    if st.session_state["valore_cliente_cerca"] in opzioni_cerca
+                    else 0
                 )
-                
+
+                scelta_cerca = st.selectbox(
+                    "Seleziona il cliente trovato",
+                    opzioni_cerca,
+                    index=idx_default,
+                    key="sel_cliente_cerca_widget",
+                )
+
                 # Aggiorna lo stato sul cambiamento
                 if scelta_cerca:
                     st.session_state["valore_cliente_cerca"] = scelta_cerca
-                    
-                cliente_trovato = mappa_cerca[st.session_state["valore_cliente_cerca"]]
-                st.success(f"✅ Cliente selezionato: **{cliente_trovato['cognome']} {cliente_trovato['nome']}** (Codice: {cliente_trovato['codice_personale']})")
-                if st.button("➡️ VAI A VENDITA / RITIRO CON QUESTO CLIENTE", use_container_width=True):
-                    cid = int(cliente_trovato['id'])
+
+                cliente_trovato = mappa_cerca[
+                    st.session_state["valore_cliente_cerca"]
+                ]
+                st.success(
+                    f"✅ Cliente selezionato: **{cliente_trovato['cognome']} {cliente_trovato['nome']}** "
+                    f"(Codice: {cliente_trovato['codice_personale']})"
+                )
+                if st.button(
+                    "➡️ VAI A VENDITA / RITIRO CON QUESTO CLIENTE", use_container_width=True
+                ):
+                    cid = int(cliente_trovato["id"])
                     # Imposta il cliente come venditore e/o acquirente a seconda della destinazione
-                    if st.session_state.get("destinazione_dopo_cliente", "").startswith("Cassa"):
+                    if (
+                        st.session_state.get("destinazione_dopo_cliente", "")
+                        .startswith("Cassa")
+                    ):
                         st.session_state["id_acquirente_corrente"] = cid
                     else:
                         st.session_state["id_venditore_corrente"] = cid
-                    st.session_state["pagina"] = st.session_state["destinazione_dopo_cliente"]
+                    st.session_state["pagina"] = (
+                        st.session_state["destinazione_dopo_cliente"]
+                    )
                     st.session_state["destinazione_dopo_cliente"] = None
                     if "valore_cliente_cerca" in st.session_state:
                         del st.session_state["valore_cliente_cerca"]
                     st.rerun()
 
-    # --- 2. SCHERMATA MODIFICA E VARIAZIONE ---
+    # ------------------- 2. SCHERMATA MODIFICA E VARIAZIONE -------------------
     with tab_modifica:
         st.subheader("Varia i dati o cancella un utente")
 
@@ -204,17 +278,25 @@ def mostra_pagina():
             st.info("Nessun cliente registrato nel database.")
         else:
             mappa_clienti = {f"{c['id']} - {c['cognome']} {c['nome']} ({c['codice_personale']})": c for c in clienti_list}
-            scelta = st.selectbox("Seleziona il cliente su cui lavorare", list(mappa_clienti.keys()))
+            scelta = st.selectbox(
+                "Seleziona il cliente su cui lavorare", list(mappa_clienti.keys())
+            )
             cliente_selezionato = mappa_clienti[scelta]
 
             st.write("---")
-            st.text_input("Numero Progressivo assegnato (ID)", value=str(cliente_selezionato['id']), disabled=True)
-            st.text_input("Codice Personale (Bloccato di sicurezza)", value=cliente_selezionato['codice_personale'], disabled=True)
+            st.text_input(
+                "Numero Progressivo assegnato (ID)", value=str(cliente_selezionato["id"]), disabled=True
+            )
+            st.text_input(
+                "Codice Personale (Bloccato di sicurezza)", value=cliente_selezionato["codice_personale"], disabled=True
+            )
 
-            mod_nome = st.text_input("Varia Nome", value=cliente_selezionato['nome'])
-            mod_cognome = st.text_input("Varia Cognome", value=cliente_selezionato['cognome'])
-            mod_tel = st.text_input("Varia Telefono", value=cliente_selezionato['telefono'] or "")
-            mod_email = st.text_input("Varia Email", value=cliente_selezionato.get('email', '') or "").strip().lower()
+            mod_nome = st.text_input("Varia Nome", value=cliente_selezionato["nome"])
+            mod_cognome = st.text_input("Varia Cognome", value=cliente_selezionato["cognome"])
+            mod_tel = st.text_input("Varia Telefono", value=cliente_selezionato["telefono"] or "")
+            mod_email = st.text_input(
+                "Varia Email", value=cliente_selezionato.get("email", "") or "", help="Inserisci l'email in minuscolo"
+            ).strip().lower()
 
             col_btn1, col_btn2 = st.columns(2)
             with col_btn1:
@@ -223,13 +305,18 @@ def mostra_pagina():
                         # Anche in fase di modifica controlliamo che i nuovi dati non vadano a sovrapporsi a qualcun altro
                         doppione_mod = False
                         for c in clienti_list:
-                            if c['id'] != cliente_selezionato['id']: # Non controlliamo contro se stesso
-                                if mod_tel and c.get('telefono') == mod_tel.strip():
-                                    st.error(f"❌ Impossibile aggiornare: Il telefono è già usato da un altro cliente (ID: {c['id']}).")
+                            if c["id"] != cliente_selezionato["id"]:
+                                # Non controlliamo contro se stesso
+                                if mod_tel and c.get("telefono") == mod_tel.strip():
+                                    st.error(
+                                        f"❌ Impossibile aggiornare: Il telefono è già usato da un altro cliente (ID: {c['id']})."
+                                    )
                                     doppione_mod = True
                                     break
-                                if mod_email and c.get('email', '').strip().lower() == mod_email:
-                                    st.error(f"❌ Impossibile aggiornare: L'email è già usata da un altro cliente (ID: {c['id']}).")
+                                if mod_email and c.get("email", "").strip().lower() == mod_email:
+                                    st.error(
+                                        f"❌ Impossibile aggiornare: L'email è già usata da un altro cliente (ID: {c['id']})."
+                                    )
                                     doppione_mod = True
                                     break
 
@@ -238,10 +325,12 @@ def mostra_pagina():
                                 "nome": mod_nome.strip(),
                                 "cognome": mod_cognome.strip(),
                                 "telefono": mod_tel.strip(),
-                                "email": mod_email
+                                "email": mod_email,
                             }
                             url_up = f"{URL_REST}/clienti?id=eq.{cliente_selezionato['id']}"
-                            res_up = requests.patch(url_up, headers=HEADERS, json=dati_up)
+                            res_up = requests.patch(
+                                url_up, headers=HEADERS, json=dati_up
+                            )
                             if res_up.status_code < 400:
                                 st.success("✅ Dati aggiornati correttamente online!")
                                 st.rerun()
@@ -258,12 +347,32 @@ def mostra_pagina():
                     else:
                         st.error("Impossibile eliminare. Il cliente potrebbe avere libri attivi.")
 
-    # --- TABELLONE GENERALE ---
+    # ------------------- TABELLONE GENERALE -------------------
     st.markdown("---")
     st.subheader("📋 Elenco Totale Clienti")
     if clienti_list:
         df_clienti = pd.DataFrame(clienti_list)
-        df_clienti['Riferimento comodo'] = df_clienti['id'].astype(str) + " - " + df_clienti['codice_personale']
-        df_clienti = df_clienti[['id', 'Riferimento comodo', 'nome', 'cognome', 'telefono', 'email']]
-        df_clienti.columns = ['ID Progressivo', 'Codice per la Cassa', 'Nome', 'Cognome', 'Telefono', 'Email']
-        st.dataframe(df_clienti.sort_values(by='ID Progressivo', ascending=False), use_container_width=True, hide_index=True)
+        df_clienti["Riferimento comodo"] = df_clienti["id"].astype(str) + " - " + df_clienti["codice_personale"]
+        df_clienti = df_clienti[
+            [
+                "id",
+                "Riferimento comodo",
+                "nome",
+                "cognome",
+                "telefono",
+                "email",
+            ]
+        ]
+        df_clienti.columns = [
+            "ID Progressivo",
+            "Codice per la Cassa",
+            "Nome",
+            "Cognome",
+            "Telefono",
+            "Email",
+        ]
+        st.dataframe(
+            df_clienti.sort_values(by="ID Progressivo", ascending=False),
+            use_container_width=True,
+            hide_index=True,
+        )
