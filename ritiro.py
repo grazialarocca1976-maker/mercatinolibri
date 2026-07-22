@@ -17,6 +17,8 @@ from ricevute_condivise import (
     pubblica_ricevuta_online,
 )
 from gestore_etichette import genera_griglia_a4, stampa_etichette_tm_l90, genera_preview_etichette
+from macro_aree import mostra_selector_macro_aree
+
 
 
 @st.cache_resource
@@ -56,9 +58,8 @@ def _cerca_area_ritiro(filtro_area):
     return r.json() if r.status_code == 200 else []
 
 
-PROJECT_ID = "ikugmkhbmyohkdbfupnx"
+from ricevute_condivise import PROJECT_ID, CHIAVE_SUPABASE
 URL_REST = f"https://{PROJECT_ID}.supabase.co/rest/v1"
-CHIAVE_SUPABASE = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlrdWdta2hibXlvaGtkYmZ1cG54Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM4NTg3ODYsImV4cCI6MjA5OTQzNDc4Nn0.W0ASwL4tJxwd_ziYXImw0aXdj3RACSGObUd0tjKyN5w"
 
 HEADERS = {
     "apikey": CHIAVE_SUPABASE,
@@ -66,6 +67,46 @@ HEADERS = {
     "Content-Type": "application/json",
     "Prefer": "return=representation"
 }
+
+
+def _carica_indirizzi_da_secrets():
+    """Carica la mappa degli indirizzi di studio da secrets.toml.
+    
+    Ogni indirizzo (es. 'Logistica_e_Trasporti') contiene la lettera (es. 'L') 
+    che identifica le classi di quell'indirizzo (es. 1AL, 1BL, 3AL, 3BL...).
+    Se non configurato, restituisce una mappa di default.
+    """
+    try:
+        indirizzi = st.secrets.get("indirizzi", None)
+        if indirizzi:
+            return dict(indirizzi)
+    except Exception:
+        pass
+    # Fallback di default se non configurato in secrets.toml
+    return {
+        "Logistica_e_Trasporti": "L",
+        "Informatica_e_Telecomunicazioni": "I",
+        "Elettronica": "E",
+        "Costruzione_del_Mezzo": "C",
+        "Costruzione_del_Mezzo_Aereo": "R",
+    }
+
+
+
+def _costruisci_filtro_area_per_indirizzo(nome_indirizzo):
+    """Costruisce il filtro per Supabase a partire dal nome dell'indirizzo.
+    
+    Ogni indirizzo ha una lettera chiave (es. 'L' per Logistica).
+    Cerca tutte le classi che contengono quella lettera, a prescindere dall'anno e dalla sezione.
+    Esempio: 'L' trova 1AL, 1BL, 3AL, 3BL...
+    """
+    indirizzi = _carica_indirizzi_da_secrets()
+    chiave = indirizzi.get(nome_indirizzo, "")
+    if not chiave:
+        return ""
+    # Cerca la lettera/chiave all'interno del nome della classe
+    return f"classi=ilike.*{chiave}*"
+
 
 
 def aggiorna_carrello_ritiro(carrello, libro_selezionato, quantita=1):
@@ -233,13 +274,13 @@ def genera_pdf_rotolo_etichette(libri_ritirati):
     return buffer.getvalue()
 
 def genera_pdf_inventario_materia(df_totale):
-    """Genera un PDF dell'inventario dei libri 'disponibile' (in carico), raggruppati per materia."""
+    """Genera un PDF dell'inventario dei libri 'disponibile' (in carico), raggruppati per materia e classe."""
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
     story = []
     styles = getSampleStyleSheet()
     inserisci_intestazione_marconi(story)
-    story.append(Paragraph("<b>INVENTARIO LIBRI IN CARICO (per Materia)</b>", styles['Title']))
+    story.append(Paragraph("<b>INVENTARIO LIBRI IN CARICO (per Materia e Classe)</b>", styles['Title']))
     story.append(Paragraph(f"Data: {datetime.date.today().strftime('%d/%m/%Y')}", styles['Normal']))
     story.append(Spacer(1, 10))
 
@@ -247,53 +288,239 @@ def genera_pdf_inventario_materia(df_totale):
     if df_disp.empty:
         story.append(Paragraph("Nessun libro in carico (disponibile) al momento.", styles['Normal']))
     else:
-        materie = sorted([m for m in df_disp['Materia'].dropna().astype(str) if m and m.lower() != 'nan']) + ['(senza materia)']
         stile_cella = ParagraphStyle('CellaInv', parent=styles['Normal'], fontSize=8, leading=10)
         stile_cella_b = ParagraphStyle('CellaInvB', parent=styles['Normal'], fontSize=8, leading=10, fontName='Helvetica-Bold')
+        
+        # Raggruppa per materia
+        materie = sorted([m for m in df_disp['Materia'].dropna().astype(str) if m and m.lower() != 'nan']) + ['(senza materia)']
         for mat in materie:
             if mat == '(senza materia)':
-                sub = df_disp[df_disp['Materia'].isna() | (df_disp['Materia'].astype(str).str.lower() == 'nan') | (df_disp['Materia'].astype(str) == '')]
+                sub_mat = df_disp[df_disp['Materia'].isna() | (df_disp['Materia'].astype(str).str.lower() == 'nan') | (df_disp['Materia'].astype(str) == '')]
             else:
-                sub = df_disp[df_disp['Materia'].astype(str) == mat]
-            if sub.empty:
+                sub_mat = df_disp[df_disp['Materia'].astype(str) == mat]
+            if sub_mat.empty:
                 continue
-            story.append(Paragraph(f"<b>{str(mat).upper()}  —  n. {len(sub)}</b>", styles['Heading3']))
-            dati = [[
-                Paragraph("<b>Cod. Copertina</b>", stile_cella_b),
-                Paragraph("<b>Titolo</b>", stile_cella_b),
-                Paragraph("<b>ISBN</b>", stile_cella_b),
-                Paragraph("<b>Prezzo Cop.</b>", stile_cella_b),
-            ]]
-            for _, r in sub.iterrows():
-                titolo_riga = str(r.get('Titolo', r.get('ISBN', ''))).upper()
-                if r.get('prevede_fascicoli', False):
-                    totale_f = int(r.get('totale_fascicoli', 0) or 0)
-                    consegnati_f = int(r.get('fascicoli_consegnati', 0) or 0)
-                    titolo_riga += f" (FASCICOLI: {consegnati_f}/{totale_f})"
-                dati.append([
-                    Paragraph(str(r.get('Codice Copertina', '')), stile_cella),
-                    Paragraph(titolo_riga, stile_cella),
-                    Paragraph(str(r.get('ISBN', '')), stile_cella),
-                    Paragraph(f"{float(r.get('Prezzo Copertina (€)', 0.0) or 0.0):.2f} €", stile_cella),
-                ])
-            t = Table(dati, colWidths=[100, 300, 100, 80])
-            t.setStyle(TableStyle([
-                ('BACKGROUND', (0,0), (-1,0), colors.grey),
-                ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-                ('GRID', (0,0), (-1,-1), 0.5, colors.black),
-                ('VALIGN', (0,0), (-1,-1), 'TOP'),
-                ('TOPPADDING', (0,0), (-1,-1), 4),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-            ]))
-            story.append(t)
+            
+            story.append(Paragraph(f"<b>{str(mat).upper()}  —  n. {len(sub_mat)}</b>", styles['Heading3']))
+            
+            # All'interno della materia, raggruppa per classe
+            classi = sorted([c for c in sub_mat['Classe'].dropna().astype(str) if c and c.lower() != 'nan']) + ['(senza classe)']
+            for cls in classi:
+                if cls == '(senza classe)':
+                    sub = sub_mat[sub_mat['Classe'].isna() | (sub_mat['Classe'].astype(str).str.lower() == 'nan') | (sub_mat['Classe'].astype(str) == '')]
+                else:
+                    sub = sub_mat[sub_mat['Classe'].astype(str) == cls]
+                if sub.empty:
+                    continue
+                
+                story.append(Paragraph(f"<i>Classe {cls}  —  n. {len(sub)}</i>", styles['Normal']))
+                dati = [[
+                    Paragraph("<b>Cod. Copertina</b>", stile_cella_b),
+                    Paragraph("<b>Titolo</b>", stile_cella_b),
+                    Paragraph("<b>ISBN</b>", stile_cella_b),
+                    Paragraph("<b>Prezzo Cop.</b>", stile_cella_b),
+                ]]
+                for _, r in sub.iterrows():
+                    titolo_riga = str(r.get('Titolo', r.get('ISBN', ''))).upper()
+                    if r.get('prevede_fascicoli', False):
+                        totale_f = int(r.get('totale_fascicoli', 0) or 0)
+                        consegnati_f = int(r.get('fascicoli_consegnati', 0) or 0)
+                        titolo_riga += f" (FASCICOLI: {consegnati_f}/{totale_f})"
+                    dati.append([
+                        Paragraph(str(r.get('Codice Copertina', '')), stile_cella),
+                        Paragraph(titolo_riga, stile_cella),
+                        Paragraph(str(r.get('ISBN', '')), stile_cella),
+                        Paragraph(f"{float(r.get('Prezzo Copertina (€)', 0.0) or 0.0):.2f} €", stile_cella),
+                    ])
+                t = Table(dati, colWidths=[100, 300, 100, 80])
+                t.setStyle(TableStyle([
+                    ('BACKGROUND', (0,0), (-1,0), colors.grey),
+                    ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.black),
+                    ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                    ('TOPPADDING', (0,0), (-1,-1), 4),
+                    ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+                ]))
+                story.append(t)
+                story.append(Spacer(1, 6))
             story.append(Spacer(1, 10))
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
 
+
+def genera_pdf_inventario_venditore(df_totale):
+    """Genera un PDF dell'inventario dei libri 'disponibile' (in carico), raggruppati per venditore (persona)."""
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    story = []
+    styles = getSampleStyleSheet()
+    inserisci_intestazione_marconi(story)
+    story.append(Paragraph("<b>INVENTARIO LIBRI IN CARICO (per Venditore)</b>", styles['Title']))
+    story.append(Paragraph(f"Data: {datetime.date.today().strftime('%d/%m/%Y')}", styles['Normal']))
+    story.append(Spacer(1, 10))
+
+    df_disp = df_totale[df_totale['Stato'] == 'disponibile'].copy()
+    if df_disp.empty:
+        story.append(Paragraph("Nessun libro in carico (disponibile) al momento.", styles['Normal']))
+    else:
+        stile_cella = ParagraphStyle('CellaInv', parent=styles['Normal'], fontSize=8, leading=10)
+        stile_cella_b = ParagraphStyle('CellaInvB', parent=styles['Normal'], fontSize=8, leading=10, fontName='Helvetica-Bold')
+        
+        # Raggruppa per codice copertina (che contiene il codice venditore)
+        # Estraiamo il codice venditore dalla prima parte del Codice Copertina
+        df_disp['Codice Venditore'] = df_disp['Codice Copertina'].astype(str).str.split('-').str[0]
+        venditori = sorted(df_disp['Codice Venditore'].dropna().unique())
+        
+        for cod_vend in venditori:
+            sub = df_disp[df_disp['Codice Venditore'] == cod_vend]
+            if sub.empty:
+                continue
+            
+            story.append(Paragraph(f"<b>VENDITORE: {cod_vend}  —  n. {len(sub)} libri</b>", styles['Heading3']))
+            
+            # All'interno del venditore, raggruppa per materia
+            materie = sorted([m for m in sub['Materia'].dropna().astype(str) if m and m.lower() != 'nan']) + ['(senza materia)']
+            for mat in materie:
+                if mat == '(senza materia)':
+                    sub_mat = sub[sub['Materia'].isna() | (sub['Materia'].astype(str).str.lower() == 'nan') | (sub['Materia'].astype(str) == '')]
+                else:
+                    sub_mat = sub[sub['Materia'].astype(str) == mat]
+                if sub_mat.empty:
+                    continue
+                
+                story.append(Paragraph(f"<i>{mat}  —  n. {len(sub_mat)}</i>", styles['Normal']))
+                dati = [[
+                    Paragraph("<b>Cod. Copertina</b>", stile_cella_b),
+                    Paragraph("<b>Titolo</b>", stile_cella_b),
+                    Paragraph("<b>ISBN</b>", stile_cella_b),
+                    Paragraph("<b>Prezzo Cop.</b>", stile_cella_b),
+                ]]
+                for _, r in sub_mat.iterrows():
+                    titolo_riga = str(r.get('Titolo', r.get('ISBN', ''))).upper()
+                    if r.get('prevede_fascicoli', False):
+                        totale_f = int(r.get('totale_fascicoli', 0) or 0)
+                        consegnati_f = int(r.get('fascicoli_consegnati', 0) or 0)
+                        titolo_riga += f" (FASCICOLI: {consegnati_f}/{totale_f})"
+                    dati.append([
+                        Paragraph(str(r.get('Codice Copertina', '')), stile_cella),
+                        Paragraph(titolo_riga, stile_cella),
+                        Paragraph(str(r.get('ISBN', '')), stile_cella),
+                        Paragraph(f"{float(r.get('Prezzo Copertina (€)', 0.0) or 0.0):.2f} €", stile_cella),
+                    ])
+                t = Table(dati, colWidths=[100, 300, 100, 80])
+                t.setStyle(TableStyle([
+                    ('BACKGROUND', (0,0), (-1,0), colors.grey),
+                    ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.black),
+                    ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                    ('TOPPADDING', (0,0), (-1,-1), 4),
+                    ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+                ]))
+                story.append(t)
+                story.append(Spacer(1, 6))
+            story.append(Spacer(1, 10))
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def _selettore_venditore_inline(url_rest, headers):
+
+    """Mostra un selettore venditori con possibilità di crearne uno nuovo inline.
+    
+    Restituisce il dict del venditore selezionato/creato, oppure None.
+    """
+    res_clienti = requests.get(f"{url_rest}/clienti?select=id,cognome,nome,codice_personale,telefono,email", headers=headers)
+    clienti_list = res_clienti.json() if res_clienti.status_code == 200 else []
+
+    opzioni_clienti = {}
+    chiavi_clienti = []
+
+    for c in clienti_list:
+        label = f"{c['cognome']} {c['nome']} ({c.get('codice_personale', 'N/D')})"
+        opzioni_clienti[label] = c
+        chiavi_clienti.append(label)
+
+    if not chiavi_clienti:
+        st.warning("⚠️ Nessun cliente presente. Registra un nuovo cliente per procedere.")
+        with st.expander("➕ Registra Nuovo Cliente", expanded=True):
+            return _form_nuovo_venditore(url_rest, headers)
+
+    opzioni_con_crea = ["➕ Crea nuovo cliente..."] + chiavi_clienti
+
+    index_venditore = 0
+    if "id_venditore_corrente" in st.session_state:
+        for idx, key in enumerate(chiavi_clienti):
+            if opzioni_clienti.get(key, {}).get("id") == st.session_state["id_venditore_corrente"]:
+                index_venditore = idx + 1
+                break
+
+    scelta = st.selectbox(
+        "Seleziona il Cliente / Venditore (o creane uno nuovo)",
+        opzioni_con_crea,
+        index=index_venditore,
+        key="select_venditore_ritiro",
+        help="Scegli un cliente esistente o seleziona 'Crea nuovo cliente...' per registrarne uno.",
+    )
+
+    if scelta == "➕ Crea nuovo cliente...":
+        with st.expander("➕ Registra Nuovo Cliente", expanded=True):
+            return _form_nuovo_venditore(url_rest, headers)
+    else:
+        cliente = opzioni_clienti[scelta]
+        st.session_state["id_venditore_corrente"] = cliente["id"]
+        return cliente
+
+
+def _form_nuovo_venditore(url_rest, headers):
+    """Mostra un form per registrare un nuovo venditore e lo salva su Supabase."""
+    import random, string
+    col1, col2 = st.columns(2)
+    with col1:
+        nome = st.text_input("Nome *", key="nuovo_nome_ritiro").strip()
+        cognome = st.text_input("Cognome *", key="nuovo_cognome_ritiro").strip()
+    with col2:
+        telefono = st.text_input("Telefono *", key="nuovo_tel_ritiro").strip()
+        email = st.text_input("Email", key="nuovo_email_ritiro").strip().lower()
+
+    if st.button("💾 Salva e seleziona questo cliente", key="salva_nuovo_cliente_ritiro"):
+        if not nome or not cognome or not telefono:
+            st.error("Nome, Cognome e Telefono sono obbligatori.")
+            return None
+        lettere = ''.join(random.choices(string.ascii_uppercase, k=2))
+        codice = f"{cognome[:3].upper()}{nome[:2].upper()}{lettere}"
+        payload = {
+            "codice_personale": codice,
+            "nome": nome,
+            "cognome": cognome,
+            "telefono": telefono,
+            "email": email,
+        }
+        try:
+            r = requests.post(f"{url_rest}/clienti", headers=headers, json=payload)
+            if r.status_code < 400:
+                nuovo = r.json()
+                if isinstance(nuovo, list) and len(nuovo) > 0:
+                    nuovo = nuovo[0]
+                st.success(f"✅ Cliente {cognome} {nome} registrato con codice {codice}!")
+                st.session_state["id_venditore_corrente"] = nuovo["id"]
+                st.rerun()
+                return nuovo
+            else:
+                st.error(f"Errore salvataggio: {r.text}")
+        except Exception as e:
+            st.error(f"Errore: {e}")
+        return None
+    return None
+
+
 def mostra_pagina():
     st.header("📥 Presa in Carico e Ritiro Libri Usati")
-    tab_ritiro, tab_inventario = st.tabs(["Prendi in Carico Libri", "📋 Inventario Generale Magazzino"])
+    tab_ritiro, tab_inventario, tab_ristampa = st.tabs(["Prendi in Carico Libri", "📋 Inventario Generale Magazzino", "🖨️ Ristampa Etichette"])
+
+
+
     
     if "carrello_ritiro" not in st.session_state:
         st.session_state["carrello_ritiro"] = []
@@ -301,41 +528,22 @@ def mostra_pagina():
         st.session_state["libri_appena_salvati"] = []
         
     with tab_ritiro:
-        clienti_list = _carica_clienti_ritiro()
-        
-        if not clienti_list:
-            st.warning("⚠️ Registra almeno un cliente prima di fare un ritiro.")
+        # Selezione venditore (con possibilità di crearne uno nuovo inline)
+        dati_cliente = _selettore_venditore_inline(URL_REST, HEADERS)
+        if dati_cliente is None:
+            st.info("Seleziona o registra un cliente per iniziare il ritiro.")
             return
-            
-        opzioni_clienti = {f"{c['id']} - {c['cognome']} {c['nome']} ({c['codice_personale']})": c for c in clienti_list}
-        chiavi_clienti = list(opzioni_clienti.keys())
 
-        # Mantiene in memoria l'ultimo venditore selezionato tra un rerun e l'altro
-        if "id_venditore_corrente" not in st.session_state:
-            st.session_state["id_venditore_corrente"] = None
-        index_venditore = 0
-        if st.session_state["id_venditore_corrente"] is not None:
-            for i, k in enumerate(chiavi_clienti):
-                if opzioni_clienti[k]["id"] == st.session_state["id_venditore_corrente"]:
-                    index_venditore = i
-                    break
-
-        cliente_selezionato = st.radio(
-            "Seleziona il Cliente / Venditore (elenco completo, clicca con il mouse):",
-            chiavi_clienti,
-            index=index_venditore,
-            help="Elenco completo dei clienti registrati. Clicca su una riga per selezionare il venditore. La selezione resta memorizzata tra un'operazione e l'altra.",
-        )
-        dati_cliente = opzioni_clienti[cliente_selezionato]
         st.session_state["id_venditore_corrente"] = dati_cliente["id"]
 
-        # Mostra subito i dati del venditore selezionato (leggibili senza cliccare di nuovo)
+        # Mostra i dati del venditore selezionato
         st.info(
             f"👤 **Venditore selezionato:** {dati_cliente['cognome']} {dati_cliente['nome']}  \n"
             f"🆔 Codice: `{dati_cliente['codice_personale']}`  \n"
             f"📞 Tel: {dati_cliente.get('telefono', 'N.D.')}  \n"
             f"✉️ Email: {dati_cliente.get('email', 'N.D.')}"
         )
+
         
         st.markdown("---")
         st.caption("🔍 Scrivi qui sotto: riconosco da solo se e' un ISBN, un titolo/autore o una classe (es. 1AI). Nessun pallino da cliccare.")
@@ -360,21 +568,13 @@ def mostra_pagina():
                     st.error("❌ Nessun libro trovato con questo frammento di ISBN.")
             elif sembra_classe:
                 classe_input = ricerca_unica.upper()
-                if classe_input.startswith("1"):
-                    with st.expander("📋 VEDI ELENCO LIBRI IN COMUNE PER MACRO-AREE (CLASSI PRIME)"):
-                        st.write("Seleziona la macro-area per estrarre tutti i libri adottati contemporaneamente dalle sezioni con due lettere:")
-                        area_scelta = st.selectbox("Scegli l'area dei corsi:", ["-- Seleziona Area --", "Area Liceo (1CL, 1DL)", "Area Tecnico (1AI, 1BE, 1CM)", "Area Professionale (1PR, 1MA)"])
-                        filtro_area = ""
-                        if "Liceo" in area_scelta: filtro_area = "classi=ilike.*1CL*,classi=ilike.*1DL*"
-                        elif "Tecnico" in area_scelta: filtro_area = "classi=ilike.*1AI*,classi=ilike.*1BE*,classi=ilike.*1CM*"
-                        elif "Professionale" in area_scelta: filtro_area = "classi=ilike.*1PR*,classi=ilike.*1MA*"
-                        if filtro_area:
-                            libri_area_list = _cerca_area_ritiro(filtro_area)
-                            if libri_area_list:
-                                df_area = pd.DataFrame(libri_area_list)
-                                df_area.columns = ['ISBN', 'Titolo Volume Scolastico', 'Classi Adottanti', 'Prezzo (€)']
-                                st.dataframe(df_area, use_container_width=True, hide_index=True)
-                            else: st.info("Nessun libro inserito nel database per questa macro-area.")
+                # Estrae il numero dell'anno (prima cifra) dalla classe, es. "1AI" → "1", "3CL" → "3"
+                anno_classe = classe_input[0] if classe_input and classe_input[0].isdigit() else ""
+                if anno_classe in ("1", "3"):
+                    mostra_selector_macro_aree(anno_classe, URL_REST, HEADERS)
+
+
+
                 libri_trovati = _cerca_classe_ritiro(classe_input)
                 if not libri_trovati: st.warning(f"Nessun libro censito specificamente per la classe {classe_input}.")
             else:
@@ -498,9 +698,11 @@ def mostra_pagina():
                         "prevede_fascicoli": prevede_fascicoli,
                         "totale_fascicoli": totale_fascicoli,
                         "fascicoli_consegnati": fascicoli_consegnati,
+                        "volume": libro_selezionato_dati.get("volume") or libro_selezionato_dati.get("classi", ""),
                     },
                     quantita=quantita,
                 )
+
                 st.success("Aggiunto al carrello provvisorio!")
                 st.rerun()
                 
@@ -560,7 +762,8 @@ def mostra_pagina():
                                         dati_copia = risposta_server
                                         
                                     id_generato = dati_copia['id_libro']
-                                    barcode_val = f"{dati_cliente.get('id')}-{id_generato}"
+                                    barcode_val = f"{dati_cliente.get('codice_personale')}-{id_generato}"
+
                                     
                                     # Annotazione dei dettagli dei fascicoli nel titolo per la ricevuta cartacea/PDF
                                     titolo_completo = item['titolo']
@@ -577,8 +780,11 @@ def mostra_pagina():
                                         "barcode": barcode_val,
                                         "prevede_fascicoli": item.get("prevede_fascicoli", False),
                                         "totale_fascicoli": item.get("totale_fascicoli", 0),
-                                        "fascicoli_consegnati": item.get("fascicoli_consegnati", 0)
+                                        "fascicoli_consegnati": item.get("fascicoli_consegnati", 0),
+                                        "volume": item.get("volume", ""),
                                     })
+
+
                                     
                                     try:
                                         requests.patch(
@@ -743,130 +949,180 @@ def mostra_pagina():
 
     with tab_inventario:
         st.subheader("📚 Elenco Totale delle Copie Fisiche in Magazzino")
-        res_copie = requests.get(f"{URL_REST}/copie_libri?select=*", headers=HEADERS)
-        res_cat = requests.get(f"{URL_REST}/catalogo_libri?select=isbn,titolo,materia,autore,classi", headers=HEADERS)
-        if res_copie.status_code == 200 and res_cat.status_code == 200:
-            copie_dati = res_copie.json()
-            cat_dati = res_cat.json()
-            if len(copie_dati) > 0:
-                df_copie = pd.DataFrame(copie_dati)
-                df_cat = pd.DataFrame(cat_dati)
-                df_totale = pd.merge(df_copie, df_cat, on="isbn", how="left")
+        st.caption("Clicca il pulsante per caricare l'inventario dal database (solo quando ti serve).")
+        
+        if st.button("📥 CARICA INVENTARIO", use_container_width=True, key="btn_carica_inventario"):
+            with st.spinner("Caricamento inventario in corso..."):
+                res_copie = requests.get(f"{URL_REST}/copie_libri?select=*", headers=HEADERS)
+                res_cat = requests.get(f"{URL_REST}/catalogo_libri?select=isbn,titolo,materia,autore,classi", headers=HEADERS)
+                if res_copie.status_code == 200 and res_cat.status_code == 200:
+                    copie_dati = res_copie.json()
+                    cat_dati = res_cat.json()
+                    if len(copie_dati) > 0:
+                        df_copie = pd.DataFrame(copie_dati)
+                        df_cat = pd.DataFrame(cat_dati)
+                        df_totale = pd.merge(df_copie, df_cat, on="isbn", how="left")
 
-                res_cl_all = requests.get(f"{URL_REST}/clienti?select=id,codice_personale", headers=HEADERS)
-                if res_cl_all.status_code == 200 and res_cl_all.json():
-                    df_cl_all = pd.DataFrame(res_cl_all.json())
-                    df_totale = pd.merge(df_totale, df_cl_all, left_on="id_venditore", right_on="id", how="left")
-                    df_totale['Codice Etichetta'] = df_totale['codice_personale'].astype(str) + "-" + df_totale['id_libro'].astype(str)
-                    df_totale = df_totale[['Codice Etichetta', 'isbn', 'titolo', 'materia', 'prezzo_inserito_mano', 'stato']]
-                    df_totale.columns = ['Codice Copertina', 'ISBN', 'Titolo', 'Materia', 'Prezzo Copertina (€)', 'Stato']
-                    st.dataframe(df_totale.sort_values(by='Codice Copertina'), use_container_width=True, hide_index=True)
+                        res_cl_all = requests.get(f"{URL_REST}/clienti?select=id,codice_personale", headers=HEADERS)
+                        if res_cl_all.status_code == 200 and res_cl_all.json():
+                            df_cl_all = pd.DataFrame(res_cl_all.json())
+                            df_totale = pd.merge(df_totale, df_cl_all, left_on="id_venditore", right_on="id", how="left")
+                            df_totale['Codice Etichetta'] = df_totale['codice_personale'].astype(str) + "-" + df_totale['id_libro'].astype(str)
+                            df_totale = df_totale[['Codice Etichetta', 'isbn', 'titolo', 'materia', 'classi', 'prezzo_inserito_mano', 'stato']]
+                            df_totale.columns = ['Codice Copertina', 'ISBN', 'Titolo', 'Materia', 'Classe', 'Prezzo Copertina (€)', 'Stato']
+                            st.session_state["df_inventario"] = df_totale
+                            st.success(f"✅ Inventario caricato: {len(df_totale)} copie totali.")
+                        else:
+                            st.warning("Impossibile caricare i dati dei clienti.")
+                    else: 
+                        st.info("Nessun libro usato presente in magazzino al momento.")
+                else: 
+                    st.error("Errore di sincronizzazione con il server cloud.")
+        
+        # Mostra l'inventario se già caricato in sessione
+        if "df_inventario" in st.session_state and st.session_state["df_inventario"] is not None:
+            df_totale = st.session_state["df_inventario"]
+            st.dataframe(df_totale.sort_values(by='Codice Copertina'), use_container_width=True, hide_index=True)
+            
+            st.markdown("---")
+            st.subheader("🖨️ Stampa inventario")
+            st.caption("Genera un PDF dei soli libri 'disponibile' (ancora in carico).")
+            
+            # Selettore per scegliere una singola materia
+            materie_disponibili = sorted([m for m in df_totale['Materia'].dropna().astype(str) if m and m.lower() != 'nan'])
+            materia_scelta = st.selectbox(
+                "Filtra per materia (opzionale - seleziona 'Tutte' per includerle tutte):",
+                ["Tutte"] + materie_disponibili,
+                key="sel_materia_inventario"
+            )
+            
+            if materia_scelta != "Tutte":
+                df_filtrato = df_totale[df_totale['Materia'].astype(str) == materia_scelta].copy()
+            else:
+                df_filtrato = df_totale.copy()
+            
+            col_pdf1, col_pdf2 = st.columns(2)
+            with col_pdf1:
+                if st.button("📚 PDF per MATERIA e CLASSE (1°, 2°, 3°...)", use_container_width=True, key="btn_inv_mat_classe"):
+                    pdf_inv = genera_pdf_inventario_materia(df_filtrato)
+                    st.download_button(
+                        label="⬇️ Scarica PDF per Materia e Classe",
+                        data=pdf_inv,
+                        file_name="inventario_per_materia_classe.pdf",
+                        mime="application/pdf",
+                        use_container_width=True,
+                    )
+            with col_pdf2:
+                if st.button("👤 PDF per VENDITORE (persona)", use_container_width=True, key="btn_inv_venditore"):
+                    pdf_inv = genera_pdf_inventario_venditore(df_filtrato)
+                    st.download_button(
+                        label="⬇️ Scarica PDF per Venditore",
+                        data=pdf_inv,
+                        file_name="inventario_per_venditore.pdf",
+                        mime="application/pdf",
+                        use_container_width=True,
+                    )
 
-                    st.markdown("---")
-                    st.subheader("🖨️ Stampa inventario libri in carico (per materia)")
-                    st.caption("Genera un PDF dei soli libri 'disponibile' (ancora in carico), raggruppati per materia.")
-                    if st.button("🖨️ Genera PDF inventario per materia", use_container_width=True, key="btn_inv_mat"):
-                        pdf_inv = genera_pdf_inventario_materia(df_totale)
-                        st.download_button(
-                            label="⬇️ Scarica PDF Inventario per Materia",
-                            data=pdf_inv,
-                            file_name="inventario_per_materia.pdf",
-                            mime="application/pdf",
-                            use_container_width=True,
-                        )
-            else: 
-                st.info("Nessun libro usato presente in magazzino al momento.")
-        else: 
-            st.error("Errore di sincronizzazione con il server cloud.")
 
-        st.markdown("---")
+
+
+    with tab_ristampa:
         st.subheader("🖨️ Ristampa Etichette (filtra e rigenera)")
         st.caption("Usa i filtri per ristampare le etichette, ad esempio se devi rifarle: per singolo venditore, per ISBN o per materia.")
+        
         filtro_tipo = st.radio(
             "Filtra le etichette da ristampare per:",
             ["Tutte le disponibili", "Singolo Venditore (Codice Personale)", "ISBN", "Materia"],
             horizontal=True,
+            key="filtro_tipo_ristampa"
         )
+        
         filtro_val = None
         if filtro_tipo == "Singolo Venditore (Codice Personale)":
-            res_v_for = requests.get(f"{URL_REST}/clienti?select=codice_personale", headers=HEADERS)
-            lista_cod = [c['codice_personale'] for c in res_v_for.json()] if res_v_for.status_code == 200 else []
-            filtro_val = st.selectbox("Scegli il venditore:", [""] + sorted(set(lista_cod)))
+            filtro_val = st.text_input("Inserisci il Codice Personale del venditore (es. MAR10):", key="txt_cod_vend_ristampa").strip()
         elif filtro_tipo == "ISBN":
-            filtro_val = st.text_input("Digita l'ISBN (anche parziale):").strip()
+            filtro_val = st.text_input("Digita l'ISBN (anche parziale):", key="txt_isbn_ristampa").strip()
         elif filtro_tipo == "Materia":
-            res_m_for = requests.get(f"{URL_REST}/catalogo_libri?select=materia", headers=HEADERS)
-            lista_mat = [m['materia'] for m in res_m_for.json() if m.get('materia')] if res_m_for.status_code == 200 else []
-            filtro_val = st.selectbox("Scegli la materia:", [""] + sorted(set(lista_mat)))
+            filtro_val = st.text_input("Inserisci il nome della materia (es. Matematica):", key="txt_mat_ristampa").strip()
 
-        if st.button("🖨️ GENERA PDF ETICHETTE FILTRATE", use_container_width=True):
+        if st.button("🖨️ GENERA PDF ETICHETTE FILTRATE", use_container_width=True, key="btn_gen_ristampa"):
             with st.spinner("Estrazione copie..."):
-                query = f"{URL_REST}/copie_libri?select=*"
-                if filtro_tipo == "Singolo Venditore (Codice Personale)" and filtro_val:
-                    res_v_id = requests.get(f"{URL_REST}/clienti?codice_personale=eq.{filtro_val}&select=id", headers=HEADERS)
-                    if res_v_id.status_code == 200 and res_v_id.json():
-                        vid = res_v_id.json()[0]['id']
-                        query = f"{URL_REST}/copie_libri?id_venditore=eq.{vid}"
-                elif filtro_tipo == "ISBN" and filtro_val:
-                    query = f"{URL_REST}/copie_libri?isbn=ilike.*{filtro_val}*"
-                elif filtro_tipo == "Materia" and filtro_val:
-                    res_isbn_m = requests.get(f"{URL_REST}/catalogo_libri?materia=eq.{filtro_val}&select=isbn", headers=HEADERS)
-                    isbn_list = [r['isbn'] for r in res_isbn_m.json()] if res_isbn_m.status_code == 200 else []
-                    if isbn_list:
-                        isbn_filt = ",".join([f"isbn.eq.{i}" for i in isbn_list])
-                        query = f"{URL_REST}/copie_libri?or=({isbn_filt})"
-                res_copie_f = requests.get(query, headers=HEADERS)
-                copie_f = res_copie_f.json() if res_copie_f.status_code == 200 else []
-                if not copie_f:
-                    st.warning("Nessuna copia corrispondente ai filtri.")
-                else:
-                    res_cat_f = requests.get(f"{URL_REST}/catalogo_libri?select=isbn,titolo,materia", headers=HEADERS)
-                    df_cat_f = pd.DataFrame(res_cat_f.json()) if res_cat_f.status_code == 200 else pd.DataFrame()
-                    res_cl_f = requests.get(f"{URL_REST}/clienti?select=id,codice_personale", headers=HEADERS)
-                    df_cl_f = pd.DataFrame(res_cl_f.json()) if res_cl_f.status_code == 200 else pd.DataFrame()
-                    df_f = pd.DataFrame(copie_f)
-                    if not df_cat_f.empty:
-                        df_f = df_f.merge(df_cat_f, on="isbn", how="left")
-                    if not df_cl_f.empty:
-                        df_f = df_f.merge(df_cl_f, left_on="id_venditore", right_on="id", how="left")
-                    libri_per_etichette = []
-                    for _, r in df_f.iterrows():
-                        codice_p = r.get('codice_personale', '')
-                        id_l = r.get('id_libro')
-                        libri_per_etichette.append({
-                            "etichetta": f"{r.get('id_venditore')}-{id_l}",
-                            "isbn": r.get('isbn', ''),
-                            "titolo": r.get('titolo', r.get('isbn', '')),
-                            "prezzo": float(r.get('prezzo_inserito_mano', 0.0) or 0.0),
-                            "codice_personale": codice_p,
-                            "id_venditore": r.get('id_venditore'),
-                            "barcode": f"{r.get('id_venditore')}-{id_l}",
-                            "prevede_fascicoli": bool(r.get('prevede_fascicoli', False)),
-                            "totale_fascicoli": int(r.get('totale_fascicoli', 0) or 0),
-                            "fascicoli_consegnati": int(r.get('fascicoli_consegnati', 0) or 0),
-                        })
-                    pdf_bytes = None
-                    try:
-                        import gestore_etichette as ge
-                        importlib.reload(ge)
-                        genera_bytes = getattr(ge, "genera_griglia_a4_bytes", None)
-                        if genera_bytes is None:
-                            raise ImportError("genera_griglia_a4_bytes non trovata in gestore_etichette")
-                        pdf_bytes = genera_bytes(libri_per_etichette, layout=None, start_index=0)
-                    except Exception as e:
-                        st.error(f"Errore generazione PDF etichette: {e}")
-                    if pdf_bytes:
-                        st.session_state["pdf_etichette_ristampa"] = pdf_bytes
+                try:
+                    query = f"{URL_REST}/copie_libri?select=*"
+                    if filtro_tipo == "Singolo Venditore (Codice Personale)" and filtro_val:
+                        res_v_id = requests.get(f"{URL_REST}/clienti?codice_personale=eq.{filtro_val}&select=id", headers=HEADERS, timeout=10)
+                        if res_v_id.status_code == 200 and res_v_id.json():
+                            vid = res_v_id.json()[0]['id']
+                            query = f"{URL_REST}/copie_libri?id_venditore=eq.{vid}"
+                    elif filtro_tipo == "ISBN" and filtro_val:
+                        query = f"{URL_REST}/copie_libri?isbn=ilike.*{filtro_val}*"
+                    elif filtro_tipo == "Materia" and filtro_val:
+                        res_isbn_m = requests.get(f"{URL_REST}/catalogo_libri?materia=ilike.*{filtro_val}*&select=isbn", headers=HEADERS, timeout=10)
+                        isbn_list = [r['isbn'] for r in res_isbn_m.json()] if res_isbn_m.status_code == 200 else []
+                        if isbn_list:
+                            isbn_filt = ",".join([f"isbn.eq.{i}" for i in isbn_list])
+                            query = f"{URL_REST}/copie_libri?or=({isbn_filt})"
+                    
+                    res_copie_f = requests.get(query, headers=HEADERS, timeout=15)
+                    copie_f = res_copie_f.json() if res_copie_f.status_code == 200 else []
+                    
+                    if not copie_f:
+                        st.warning("Nessuna copia corrispondente ai filtri.")
                     else:
-                        st.session_state["pdf_etichette_ristampa"] = None
-                        st.warning("Impossibile generare il PDF delle etichette.")
+                        res_cat_f = requests.get(f"{URL_REST}/catalogo_libri?select=isbn,titolo,materia", headers=HEADERS, timeout=10)
+                        df_cat_f = pd.DataFrame(res_cat_f.json()) if res_cat_f.status_code == 200 else pd.DataFrame()
+                        res_cl_f = requests.get(f"{URL_REST}/clienti?select=id,codice_personale", headers=HEADERS, timeout=10)
+                        df_cl_f = pd.DataFrame(res_cl_f.json()) if res_cl_f.status_code == 200 else pd.DataFrame()
+                        df_f = pd.DataFrame(copie_f)
+                        if not df_cat_f.empty:
+                            df_f = df_f.merge(df_cat_f, on="isbn", how="left")
+                        if not df_cl_f.empty:
+                            df_f = df_f.merge(df_cl_f, left_on="id_venditore", right_on="id", how="left")
+                        libri_per_etichette = []
+                        for _, r in df_f.iterrows():
+                            codice_p = r.get('codice_personale', '')
+                            id_l = r.get('id_libro')
+                            barcode_val = f"{codice_p}-{id_l}" if codice_p else str(id_l)
+                            libri_per_etichette.append({
+                                "etichetta": barcode_val,
+                                "isbn": r.get('isbn', ''),
+                                "titolo": r.get('titolo', r.get('isbn', '')),
+                                "prezzo": float(r.get('prezzo_inserito_mano', 0.0) or 0.0),
+                                "codice_personale": codice_p,
+                                "id_venditore": r.get('id_venditore'),
+                                "barcode": barcode_val,
+                                "prevede_fascicoli": bool(r.get('prevede_fascicoli', False)),
+                                "totale_fascicoli": int(r.get('totale_fascicoli', 0) or 0),
+                                "fascicoli_consegnati": int(r.get('fascicoli_consegnati', 0) or 0),
+                            })
 
-                # Il download button vive fuori dal blocco del button per non scomparire al rerun
-                if st.session_state.get("pdf_etichette_ristampa"):
-                    st.download_button(
-                        label=f"⬇️ SCARICA PDF ETICHETTE ({len(libri_per_etichette)} etichette)",
-                        data=st.session_state["pdf_etichette_ristampa"],
-                        file_name="etichette_ristampa.pdf",
-                        mime="application/pdf",
-                        use_container_width=True,
-                    )
+                        pdf_bytes = None
+                        try:
+                            import gestore_etichette as ge
+                            importlib.reload(ge)
+                            genera_bytes = getattr(ge, "genera_griglia_a4_bytes", None)
+                            if genera_bytes is None:
+                                raise ImportError("genera_griglia_a4_bytes non trovata in gestore_etichette")
+                            pdf_bytes = genera_bytes(libri_per_etichette, layout=None, start_index=0)
+                        except Exception as e:
+                            st.error(f"Errore generazione PDF etichette: {e}")
+                        if pdf_bytes:
+                            st.session_state["pdf_etichette_ristampa"] = pdf_bytes
+                            st.download_button(
+                                label=f"⬇️ SCARICA PDF ETICHETTE ({len(libri_per_etichette)} etichette)",
+                                data=pdf_bytes,
+                                file_name="etichette_ristampa.pdf",
+                                mime="application/pdf",
+                                use_container_width=True,
+                                key="dl_ristampa"
+                            )
+                        else:
+                            st.warning("Impossibile generare il PDF delle etichette.")
+                except Exception as e:
+                    st.error(f"Errore durante l'estrazione delle copie: {e}")
+
+
+
+
+
+

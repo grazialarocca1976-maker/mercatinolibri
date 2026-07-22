@@ -18,16 +18,20 @@ from ricevute_condivise import (
     pubblica_ricevuta_online,
 )
 
-PROJECT_ID = "ikugmkhbmyohkdbfupnx"
-URL_REST = f"https://{PROJECT_ID}.supabase.co/rest/v1"
-CHIAVE_SUPABASE = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlrdWdta2hibXlvaGtkYmZ1cG54Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM4NTg3ODYsImV4cCI6MjA5OTQzNDc4Nn0.W0ASwL4tJxwd_ziYXImw0aXdj3RACSGObUd0tjKyN5w"
-
-HEADERS = {
-    "apikey": CHIAVE_SUPABASE,
-    "Authorization": f"Bearer {CHIAVE_SUPABASE}",
-    "Content-Type": "application/json",
-    "Prefer": "return=representation"
-}
+# Credenziali da st.secrets (se disponibili) o da session_state
+if "URL_REST" in st.session_state and "HEADERS" in st.session_state:
+    URL_REST = st.session_state["URL_REST"]
+    HEADERS = {**st.session_state["HEADERS"], "Prefer": "return=representation"}
+else:
+    PROJECT_ID = st.secrets["supabase"]["project_id"]
+    CHIAVE_SUPABASE = st.secrets["supabase"]["api_key"]
+    URL_REST = f"https://{PROJECT_ID}.supabase.co/rest/v1"
+    HEADERS = {
+        "apikey": CHIAVE_SUPABASE,
+        "Authorization": f"Bearer {CHIAVE_SUPABASE}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation"
+    }
 
 
 def genera_pdf_riepilogo_conto(dati_cliente, libri_cliente):
@@ -498,15 +502,9 @@ def mostra_pagina():
                         libri_cliente.loc[libri_cliente['id_libro'] == riga_mod['id_libro'], 'prevede_fascicoli'] = mod_prevede_f
                         libri_cliente.loc[libri_cliente['id_libro'] == riga_mod['id_libro'], 'totale_fascicoli'] = mod_totale_f
                         libri_cliente.loc[libri_cliente['id_libro'] == riga_mod['id_libro'], 'fascicoli_consegnati'] = mod_consegnati_f
-                    # Aggiorna anche il "Prezzo di Copertina" (colonna visibile): quel valore
-                    # deriva dal catalogo, quindi lo aggiorniamo in memoria e su catalogo_libri
-                    # (per ISBN), cosi la colonna "Prezzo di Copertina" risulta aggiornata.
-                    libri_cliente.loc[libri_cliente['isbn'] == riga_mod['isbn'], 'prezzo_copertina'] = nuovo_prezzo
-                    requests.patch(
-                        f"{URL_REST}/catalogo_libri?isbn=eq.{riga_mod['isbn']}",
-                        headers=HEADERS,
-                        json={"prezzo_copertina": nuovo_prezzo},
-                    )
+                    # Aggiorna solo il prezzo_inserito_mano di QUESTO specifico libro (non del catalogo)
+                    # per non modificare tutti i libri con lo stesso ISBN
+                    libri_cliente.loc[libri_cliente['id_libro'] == riga_mod['id_libro'], 'Prezzo Base'] = nuovo_prezzo
                     # Rigenera la ricevuta di ritiro COMPLETA (con il prezzo aggiornato) e la
                     # ripubblica online, cosi il prezzo aggiornato appare anche sulle ricevute online.
                     try:

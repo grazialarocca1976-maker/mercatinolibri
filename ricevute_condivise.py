@@ -7,8 +7,39 @@ from reportlab.platypus import Paragraph, Spacer, Image, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
-PROJECT_ID = "ikugmkhbmyohkdbfupnx"
-CHIAVE_SUPABASE = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlrdWdta2hibXlvaGtkYmZ1cG54Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM4NTg3ODYsImV4cCI6MjA5OTQzNDc4Nn0.W0ASwL4tJxwd_ziYXImw0aXdj3RACSGObUd0tjKyN5w"
+def get_supabase_keys():
+    # 1. Prova a leggere dai secrets di Streamlit
+    try:
+        import streamlit as st
+        return st.secrets["supabase"]["project_id"], st.secrets["supabase"]["api_key"]
+    except Exception:
+        pass
+
+    # 2. Prova a leggere da .streamlit/secrets.toml direttamente
+    try:
+        import tomllib
+        from pathlib import Path
+        for base_path in [Path(__file__).resolve().parent, Path.cwd()]:
+            secrets_path = base_path / ".streamlit" / "secrets.toml"
+            if secrets_path.exists():
+                with open(secrets_path, "rb") as f:
+                    data = tomllib.load(f)
+                    return data["supabase"]["project_id"], data["supabase"]["api_key"]
+    except Exception:
+        pass
+
+    # 3. Prova dalle variabili d'ambiente
+    import os
+    env_proj = os.getenv("SUPABASE_PROJECT_ID")
+    env_key = os.getenv("SUPABASE_API_KEY")
+    if env_proj and env_key:
+        return env_proj, env_key
+
+    # 4. Fallback
+    return "", ""
+
+
+PROJECT_ID, CHIAVE_SUPABASE = get_supabase_keys()
 
 
 def _sanifica_testo(valore):
@@ -19,7 +50,7 @@ def _sanifica_testo(valore):
     return testo or "sconosciuto"
 
 
-def build_receipt_storage_path(tipo_ricevuta, dati_cliente, data_riferimento=None, suffisso=None):
+def build_receipt_storage_path(tipo_ricevuta, dati_cliente, data_riferimento=None, suffisso=None, numero_ricevuta=None):
     data_testo = data_riferimento or datetime.datetime.now().strftime("%Y-%m-%d")
     if isinstance(data_testo, datetime.date):
         data_testo = data_testo.strftime("%Y-%m-%d")
@@ -33,6 +64,8 @@ def build_receipt_storage_path(tipo_ricevuta, dati_cliente, data_riferimento=Non
         codice_cliente = ""
 
     parti = [tipo_ricevuta, data_testo]
+    if numero_ricevuta:
+        parti.append(numero_ricevuta)
     if codice_cliente:
         parti.append(codice_cliente)
     elif nome_cliente:
@@ -70,8 +103,8 @@ def upload_pdf_to_supabase_storage(pdf_bytes, object_path, bucket_name="ricevute
     return {"ok": False, "url": None, "error": response.text or f"Errore upload ({response.status_code})"}
 
 
-def pubblica_ricevuta_online(st, pdf_bytes, tipo_ricevuta, dati_cliente, data_riferimento=None, suffisso=None):
-    nome_file = build_receipt_storage_path(tipo_ricevuta, dati_cliente, data_riferimento=data_riferimento, suffisso=suffisso)
+def pubblica_ricevuta_online(st, pdf_bytes, tipo_ricevuta, dati_cliente, data_riferimento=None, suffisso=None, numero_ricevuta=None):
+    nome_file = build_receipt_storage_path(tipo_ricevuta, dati_cliente, data_riferimento=data_riferimento, suffisso=suffisso, numero_ricevuta=numero_ricevuta)
     risultato = upload_pdf_to_supabase_storage(pdf_bytes, nome_file)
 
     if risultato["ok"]:

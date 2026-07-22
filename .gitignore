@@ -15,3 +15,7 @@ venv/
 
 # --- File di build/test locali ---
 tests/__pycache__/
+_diag*.txt
+_diag*.py
+_inspect*.py
+check.txt

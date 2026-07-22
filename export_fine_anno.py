@@ -10,9 +10,23 @@ import json
 import datetime
 import requests
 
-PROJECT_ID = "ikugmkhbmyohkdbfupnx"
+import os
+import tomllib
+from pathlib import Path
+
+# Legge le credenziali da secrets.toml
+_secrets_path = Path(__file__).resolve().parent / ".streamlit" / "secrets.toml"
+if _secrets_path.exists():
+    with open(_secrets_path, "rb") as _f:
+        _secrets = tomllib.load(_f)
+    PROJECT_ID = _secrets["supabase"]["project_id"]
+    CHIAVE_SUPABASE = _secrets["supabase"]["api_key"]
+else:
+    # Fallback per test
+    PROJECT_ID = os.environ.get("SUPABASE_PROJECT_ID", "")
+    CHIAVE_SUPABASE = os.environ.get("SUPABASE_API_KEY", "")
+
 URL_REST = f"https://{PROJECT_ID}.supabase.co/rest/v1"
-CHIAVE_SUPABASE = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlrdWdta2hibXlvaGtkYmZ1cG54Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM4NTg3ODYsImV4cCI6MjA5OTQzNDc4Nn0.W0ASwL4tJxwd_ziYXImw0aXdj3RACSGObUd0tjKyN5w"
 
 HEADERS = {
     "apikey": CHIAVE_SUPABASE,

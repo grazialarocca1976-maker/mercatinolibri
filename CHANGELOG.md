@@ -4,7 +4,59 @@
 
 Tutte le modifiche significative al progetto vengono documentate in questo file.
 
+## 2026-07-23 — v2.2.1 — Fix Macro Aree: filtro separato per anno (1° o 3°)
+
+### Macro Aree
+- **Fix critico**: la funzione `costruisci_filtro_area_per_indirizzo` restituiva SEMPRE entrambi gli anni (1° e 3°), mescolando i risultati. Ora accetta il parametro `anno_classe` e restituisce SOLO il filtro per l'anno richiesto (`macro_aree.py`).
+- **Chiamata aggiornata**: `mostra_selector_macro_aree` ora passa `anno_classe` a `costruisci_filtro_area_per_indirizzo`, garantendo che la ricerca 1° anno trovi SOLO libri con classi di 1° anno, e la ricerca 3° anno trovi SOLO libri con classi di 3° anno (`macro_aree.py`).
+- **Nessuna mescolanza**: libri di 3° (es. "VALORE STORIA 1", "TUTTI I COLORI DELLA MATEMATICA - SECONDO BIENNIO") non appaiono più nella ricerca 1° anno e viceversa (`macro_aree.py`).
+
+## 2026-07-22 — Bottoni HOME ingranditi, Ristampa Etichette in terzo tab Archivio, text_input
+
+### Interfaccia Home
+- **Bottoni HOME ingranditi**: i 3 pulsanti (VENDITA, RITIRO, ALTRO) ora hanno `padding: 40px`, `font-size: 28px`, gradienti colorati distinti (verde, blu, giallo) e ombra pronunciata (`app.py`).
+- **CSS `.home-btn-container`**: aggiunto contenitore flex con gap 20px e animazione hover con `translateY(-4px)` (`app.py`).
+
+### Archivio
+- **5 tab in Archivio**: aggiunto il quinto tab "🖨️ Ristampa Etichette" dopo Ricevute, Clienti, Libri in possesso, Libri venduti (`app.py`).
+- **Ristampa Etichette con text_input**: sostituiti i selectbox con campi `text_input` (ID Venditore + Codice Copia), nessuna chiamata API al caricamento della pagina (`app.py`).
+- **Guida Archivio aggiornata**: menziona "Ristampa Etichette" tra le sezioni disponibili (`app.py`).
+
+### Ritiro
+- **3 tab in Ritiro**: Ritiro, Archivio, Ristampa Etichette (già implementato in precedenza, confermato funzionante) (`ritiro.py`).
+
+### Gestore Etichette
+- **text_input invece di selectbox**: campi per ID Venditore e Codice Copia ora sono `text_input` (nessuna chiamata API al caricamento) (`gestore_etichette.py`).
+- **Barcode numerico**: formato `id_venditore-id_libro` (es. `42-101`) (`gestore_etichette.py`).
+- **Fascicoli in rosso**: evidenziati in rosso e più visibili sulle etichette (`gestore_etichette.py`).
+- **Volume/Classe sulle etichette A4**: aggiunto campo Volume/Classe (`gestore_etichette.py`).
+
+## 2026-07-22 — Configurazione indirizzi di studio da secrets.toml
+
+### Configurazione centralizzata
+- **Mappa indirizzi di studio spostata in `secrets.toml`**: la configurazione delle classi raggruppate per indirizzo (Liceo, Tecnico, Professionale) non è più hardcoded in `ritiro.py` ma letta dinamicamente da `.streamlit/secrets.toml` tramite la nuova sezione `[indirizzi]`. Ogni indirizzo contiene l'elenco delle classi che condividono lo stesso percorso di studi (`ritiro.py`).
+- **Nuove funzioni `_carica_indirizzi_da_secrets()` e `_costruisci_filtro_area_per_indirizzo()`**: la prima carica la configurazione da `st.secrets` con fallback di default; la seconda costruisce automaticamente il filtro OR per Supabase a partire dal nome dell'indirizzo (`ritiro.py`).
+- **Selectbox dinamico per le aree**: il menu a tendina delle macro-aree ora si popola automaticamente dalla configurazione in `secrets.toml`, senza bisogno di modificare il codice quando cambiano gli indirizzi (`ritiro.py`).
+- **Macro-aree estese anche alle classi 3ª**: la visualizzazione delle macro-aree non è più limitata alle sole classi prime (`startswith("1")`), ma funziona anche per le classi terze (`"3"`) e potenzialmente per qualsiasi anno, estraendo dinamicamente la prima cifra della classe inserita (`ritiro.py`).
+- **Filtro per lettera indirizzo**: la configurazione in `secrets.toml` ora usa la **lettera identificativa dell'indirizzo** (es. `L` per Logistica e Trasporti, `I` per Informatica e Telecomunicazioni, `E` per Elettronica) invece dei nomi completi delle classi. Il filtro cerca tutte le classi che contengono quella lettera, a prescindere dall'anno e dalla sezione (es. `L` trova 1AL, 1BL, 3AL, 3BL...) (`secrets.toml`, `ritiro.py`).
+- **Modulo condiviso `macro_aree.py`**: create le funzioni `carica_indirizzi_da_secrets()`, `costruisci_filtro_area_per_indirizzo()` e `mostra_selector_macro_aree()` in un modulo separato e riutilizzabile (`macro_aree.py`).
+- **Macro-aree nella sidebar**: aggiunti due expander "Classi 1ª" e "Classi 3ª" nella barra laterale di `app.py`, accessibili da qualsiasi pagina dell'app (`app.py`).
+- **Macro-aree in Cassa**: il selettore macro-aree è ora disponibile anche nella pagina di vendita (`cassa.py`).
+- **Ritiro.py usa `macro_aree`**: sostituite le funzioni locali `_carica_indirizzi_da_secrets()` e `_costruisci_filtro_area_per_indirizzo()` con l'import dal modulo condiviso (`ritiro.py`).
+- **Flusso semplificato VENDITA/RITIRO**: i bottoni HOME ora portano direttamente a Cassa e Ritiro, senza passare da Registrazione Clienti (`app.py`).
+- **Selezione/creazione clienti inline**: in Cassa e Ritiro ora c'è un unico selettore che permette sia di scegliere un cliente esistente sia di crearne uno nuovo, senza cambiare pagina (`cassa.py`, `ritiro.py`).
+- **"Libri in mio possesso" nella sidebar**: spostato dall'Archivio alla barra laterale, accessibile da tutta l'app (`app.py`).
+- **Pagina "Registrazione Clienti"**: rimane solo per modificare/eliminare clienti esistenti (admin), accessibile da ALTRO (`app.py`).
+- **Archivio semplificato**: rimosse le sezioni "Libri in mio possesso" e "Libri venduti" (ridondanti: la prima è nella sidebar, la seconda in Gestione Conti). Archivio ora ha solo Ricevute (con filtri) e Clienti (`app.py`).
+- **Fix NameError `_archivio_copie`**: spostate le funzioni di archivio PRIMA della sidebar che le chiama, per evitare NameError in esecuzione (`app.py`).
+
+
+
+
+
+
 ## 2026-07-20 — Fascicoli: gestione, stampa, ricerca unificata e test
+
 
 ### Ritiro Libri (Venditori)
 - **Ricerca unificata (niente più pallini)**: sostituito il `radio` con 3 modalità (ISBN / Titolo / Classe) con un UNICO campo di testo che riconosce automaticamente se hai scritto un ISBN (anche parziale), un titolo/autore o una classe (es. `1AI`), mostrando l'aiuto contestuale (`ritiro.py`).

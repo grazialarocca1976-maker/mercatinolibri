@@ -41,20 +41,14 @@ def prepara_dati_etichette(lista_libri):
         titolo = libro.get("titolo") or libro.get("nome") or ""
         barcode_value = libro.get("barcode")
         if barcode_value is None:
-            client_id = libro.get("id_venditore") or libro.get("client_id") or libro.get("id_cliente")
-            codice_persona = (
-                libro.get("codice_personale")
-                or libro.get("persona")
-                or libro.get("codice_persona")
-                or libro.get("cliente")
-                or ""
-            )
-            if client_id and codice_persona:
-                barcode_value = f"{client_id}-{codice_persona}-{id_val}"
-            elif codice_persona:
-                barcode_value = f"{codice_persona}-{id_val}"
+            # Il barcode per scansione rapida usa solo id_venditore-id_libro (numerico)
+            id_vend = libro.get("id_venditore") or libro.get("client_id") or ""
+            if id_vend:
+                barcode_value = f"{id_vend}-{id_val}"
             else:
                 barcode_value = str(id_val)
+
+
 
         etichette.append({
             "id": str(id_val),
@@ -64,7 +58,9 @@ def prepara_dati_etichette(lista_libri):
             "totale_fascicoli": int(libro.get("totale_fascicoli", 0) or 0),
             "fascicoli_consegnati": int(libro.get("fascicoli_consegnati", 0) or 0),
             "codice_personale": libro.get("codice_personale") or libro.get("persona") or libro.get("cliente") or "",
+            "volume": libro.get("volume") or libro.get("classi") or "",
         })
+
     return etichette
 
 
@@ -174,24 +170,39 @@ def _disegna_etichetta_a4(c, x, y, w, h, libro, scala=1.0):
     # 2. Titolo sotto l'intestazione
     c.setFont("Helvetica", max(6, 10 * s))
     c.drawString(x + 4 * mm * s, subtitle_y, titolo)
+    
+    # 2b. Volume / Classe sotto il titolo (più piccolo)
+    volume = str(libro.get("volume", "") or "")
+    if volume and volume.lower() != "nan":
+        c.setFont("Helvetica", max(5, 8 * s))
+        c.drawString(x + 4 * mm * s, subtitle_y - 3.5 * mm * s, f"Vol. {volume}")
 
-    # Se ci sono fascicoli, mostriamo una piccola nota accanto o sotto
+
+    # Se ci sono fascicoli, mostriamo una nota ben visibile in rosso sotto il titolo
     if libro.get("prevede_fascicoli"):
-        c.setFont("Helvetica-Bold", max(5, 8 * s))
+        c.setFillColorRGB(0.8, 0, 0)  # Rosso scuro
+        c.setFont("Helvetica-Bold", max(7, 11 * s))
         c.drawString(
-            x + w - 30 * mm * s,
-            title_y,
-            f"FASC: {libro.get('fascicoli_consegnati', 0)}/{libro.get('totale_fascicoli', 0)}",
+            x + 4 * mm * s,
+            subtitle_y - 4 * mm * s,
+            f"FASCICOLI: {libro.get('fascicoli_consegnati', 0)}/{libro.get('totale_fascicoli', 0)}",
         )
+        c.setFillColorRGB(0, 0, 0)  # Torna a nero
+
 
     # 3. Codice a barre grande
     barcode = code128.Code128(barcode_value, barWidth=max(0.2 * mm, 0.4 * mm * s), barHeight=barcode_h)
     barcode.drawOn(c, x + 4 * mm * s, barcode_y)
 
-    # 4. ID e Codice completo sulla stessa riga in basso
-    testo_basso = f"ID: {id_libro}   {barcode_value}"
+    # 4. Codice completo (persona-id) in basso
+    codice_completo = libro.get("codice_personale", "")
+    if codice_completo:
+        codice_completo = f"{codice_completo}-{id_libro}"
+    else:
+        codice_completo = barcode_value
     c.setFont("Helvetica-Bold", max(6, 10 * s))
-    c.drawString(x + 4 * mm * s, id_y, testo_basso)
+    c.drawString(x + 4 * mm * s, id_y, codice_completo)
+
 
 
 def _normalizza_layout(layout):

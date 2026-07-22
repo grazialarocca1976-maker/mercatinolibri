@@ -25,19 +25,99 @@ def format_date_for_db(dt):
 def prossimo_numero_ricevuta(tipo):
     return 1
 
-def genera_pdf_vendita_multipla(*args, **kwargs):
-    return b""
+from ricevute_condivise import pubblica_ricevuta_online, inserisci_intestazione_marconi, inserisci_anagrafica_cliente, inserisci_qrcode_marconi
+from io import BytesIO
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
 
-def pubblica_ricevuta_online(*args, **kwargs):
-    pass
-def mostra_pagina():
-    st.title("🛒 Cassa e Vendita Libri")
+def genera_pdf_vendita_multipla(dati_acquirente, libri_venduti, totale_complessivo, modalita_paga, numero_ricevuta=None):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    story = []
+    styles = getSampleStyleSheet()
+    
+    inserisci_intestazione_marconi(story)
+    story.append(Paragraph(f"<b>RICEVUTA DI ACQUISTO LIBRI USATI</b>", styles['Title']))
+    stile_num = ParagraphStyle('NumRicevuta', parent=styles['Title'], alignment=2, spaceAfter=2)
+    if numero_ricevuta is None:
+        numero_ricevuta = "N/D"
+    story.append(Paragraph(f"N. RICEVUTA: <b>{numero_ricevuta}</b>", stile_num))
+    stile_data = ParagraphStyle('DataOra', parent=styles['Normal'], alignment=2, fontSize=9, textColor=colors.grey)
+    story.append(Paragraph(f"Data: {datetime.date.today().strftime('%d/%m/%Y')}  Ora: {datetime.datetime.now().strftime('%H:%M')}", stile_data))
+    story.append(Spacer(1, 10))
+    
+    inserisci_anagrafica_cliente(story, "ACQUIRENTE / COMPRATORE", dati_acquirente)
+    
+    story.append(Paragraph(f"<b>Modalità di Pagamento:</b> {modalita_paga.upper()}", styles['Normal']))
+    story.append(Spacer(1, 10))
+    
+    stile_tabella_bold = ParagraphStyle('TabellaBold', parent=styles['Normal'], fontSize=10, fontName='Helvetica-Bold')
+    stile_cella = ParagraphStyle('CellaCassa', parent=styles['Normal'], fontSize=9, leading=11)
+    stile_cella_b = ParagraphStyle('CellaCassaB', parent=styles['Normal'], fontSize=9, leading=11, fontName='Helvetica-Bold')
+    
+    dati_tabella = [[
+        Paragraph("<b>Codice Copertina (Copie - Venditore)</b>", stile_cella_b), 
+        Paragraph("<b>Descrizione Articolo Usato (ISBN)</b>", stile_cella_b), 
+        Paragraph("<b>Prezzo Pagato</b>", stile_cella_b)
+    ]]
+    
+    for item in libri_venduti:
+        codice_copertina = f"{item.get('codice_venditore', '')}-{item['id_libro']}"
+        dati_tabella.append([
+            Paragraph(codice_copertina, stile_cella), 
+            Paragraph(item['titolo'].upper(), stile_cella), 
+            Paragraph(f"{item['prezzo_v']:.2f} €", stile_cella)
+        ])
+    
+    dati_tabella.append([
+        "", 
+        Paragraph("<b>TOTALE SOLO LIBRI</b>", stile_tabella_bold), 
+        Paragraph(f"<b>{totale_complessivo:.2f} €</b>", stile_tabella_bold)
+    ])
+    
+    rimborso_totale = len(libri_venduti) * 0.50
+    dati_tabella.append([
+        "", 
+        Paragraph("<b>RIMBORSO SPESE</b>", stile_tabella_bold), 
+        Paragraph(f"<b>{rimborso_totale:.2f} €</b>", stile_tabella_bold)
+    ])
 
-    if "carrello_cassa" not in st.session_state:
-        st.session_state["carrello_cassa"] = []
+    totale_con_rimborso = totale_complessivo + rimborso_totale
+    dati_tabella.append([
+        "", 
+        Paragraph("<b>TOTALE COMPLESSIVO RICEVUTO</b>", stile_tabella_bold), 
+        Paragraph(f"<b>{totale_con_rimborso:.2f} €</b>", stile_tabella_bold)
+    ])
+    
+    col_cod, col_prz = 140, 100
+    col_tit = 540 - col_cod - col_prz
+    
+    tabella = Table(dati_tabella, colWidths=[col_cod, col_tit, col_prz])
+    tabella.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.grey),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+        ('GRID', (0,0), (-1,-2), 0.5, colors.black),
+        ('LINEABOVE', (0,-1), (-1,-1), 1.5, colors.black),
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ('TOPPADDING', (0,0), (-1,-1), 6),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+    ]))
+    story.append(tabella)
+    
+    inserisci_qrcode_marconi(story)
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
 
-    # 1. Recupero Clienti per selezione acquirente
-    res_clienti = requests.get(f"{URL_REST}/clienti?select=id,cognome,nome,codice_personale", headers=HEADERS)
+def _selettore_cliente_inline(url_rest, headers, chiave_sessione="id_acquirente_corrente"):
+    """Mostra un selettore clienti con possibilità di crearne uno nuovo inline.
+    
+    Restituisce il dict del cliente selezionato/creato, oppure None.
+    """
+    # Recupera clienti esistenti
+    res_clienti = requests.get(f"{url_rest}/clienti?select=id,cognome,nome,codice_personale", headers=headers)
     clienti_list = res_clienti.json() if res_clienti.status_code == 200 else []
 
     opzioni_clienti = {}
@@ -48,26 +128,117 @@ def mostra_pagina():
         opzioni_clienti[label] = c
         chiavi_clienti.append(label)
 
+    # Se non ci sono clienti, mostra direttamente il form di creazione
     if not chiavi_clienti:
-        st.warning("⚠️ Nessun cliente presente a sistema. Registra un cliente prima di procedere.")
-        return
+        st.warning("⚠️ Nessun cliente presente. Registra un nuovo cliente per procedere.")
+        with st.expander("➕ Registra Nuovo Cliente", expanded=True):
+            return _form_nuovo_cliente(url_rest, headers)
+
+    # Opzione per creare nuovo cliente
+    opzioni_con_crea = ["➕ Crea nuovo cliente..."] + chiavi_clienti
 
     # Memorizzazione ultimo acquirente selezionato
-    index_acquirente = 0
-    if "id_acquirente_corrente" in st.session_state:
+    index_acquirente = 0  # default: "Crea nuovo cliente..."
+    if chiave_sessione in st.session_state:
         for idx, key in enumerate(chiavi_clienti):
-            if opzioni_clienti[key]["id"] == st.session_state["id_acquirente_corrente"]:
-                index_acquirente = idx
+            if opzioni_clienti.get(key, {}).get("id") == st.session_state[chiave_sessione]:
+                index_acquirente = idx + 1  # +1 perché l'opzione 0 è "Crea nuovo..."
                 break
 
-    cliente_acquirente = st.selectbox(
-        "Seleziona il Cliente Acquirente (Chi Compra)",
-        chiavi_clienti,
+    scelta = st.selectbox(
+        "Seleziona il Cliente (o creane uno nuovo)",
+        opzioni_con_crea,
         index=index_acquirente,
-        key="acquirente_select",
-        help="Puoi digitare per filtrare l'elenco. La selezione resta memorizzata tra un'operazione e l'altra.",
+        key=f"select_{chiave_sessione}",
+        help="Scegli un cliente esistente o seleziona 'Crea nuovo cliente...' per registrarne uno.",
     )
-    dati_acquirente = opzioni_clienti[cliente_acquirente]
+
+    if scelta == "➕ Crea nuovo cliente...":
+        with st.expander("➕ Registra Nuovo Cliente", expanded=True):
+            return _form_nuovo_cliente(url_rest, headers)
+    else:
+        cliente = opzioni_clienti[scelta]
+        st.session_state[chiave_sessione] = cliente["id"]
+        return cliente
+
+
+def _form_nuovo_cliente(url_rest, headers):
+    """Mostra un form per registrare un nuovo cliente e lo salva su Supabase.
+    Restituisce il dict del cliente creato, oppure None.
+    """
+    import random, string
+    col1, col2 = st.columns(2)
+    with col1:
+        nome = st.text_input("Nome *", key="nuovo_nome_cassa").strip()
+        cognome = st.text_input("Cognome *", key="nuovo_cognome_cassa").strip()
+    with col2:
+        telefono = st.text_input("Telefono *", key="nuovo_tel_cassa").strip()
+        email = st.text_input("Email", key="nuovo_email_cassa").strip().lower()
+
+    if st.button("💾 Salva e seleziona questo cliente", key="salva_nuovo_cliente_cassa"):
+        if not nome or not cognome or not telefono:
+            st.error("Nome, Cognome e Telefono sono obbligatori.")
+            return None
+        # Genera codice personale
+        lettere = ''.join(random.choices(string.ascii_uppercase, k=2))
+        codice = f"{cognome[:3].upper()}{nome[:2].upper()}{lettere}"
+        payload = {
+            "codice_personale": codice,
+            "nome": nome,
+            "cognome": cognome,
+            "telefono": telefono,
+            "email": email,
+        }
+        try:
+            r = requests.post(f"{url_rest}/clienti", headers=headers, json=payload)
+            if r.status_code < 400:
+                nuovo = r.json()
+                if isinstance(nuovo, list) and len(nuovo) > 0:
+                    nuovo = nuovo[0]
+                st.success(f"✅ Cliente {cognome} {nome} registrato con codice {codice}!")
+                st.session_state["id_acquirente_corrente"] = nuovo["id"]
+                st.rerun()
+                return nuovo
+            else:
+                st.error(f"Errore salvataggio: {r.text}")
+        except Exception as e:
+            st.error(f"Errore: {e}")
+        return None
+    return None
+
+
+def mostra_pagina():
+    st.title("🛒 Cassa e Vendita Libri")
+
+    # Se c'è una vendita completata, mostra il PDF e il pulsante per nuova vendita
+    if st.session_state.get("vendita_completata") and st.session_state.get("vendita_completata_pdf"):
+        info = st.session_state.get("vendita_completata_info", {})
+        st.balloons()
+        st.success(f"✅ **Vendita completata con successo!**")
+        st.markdown(f"**Cliente:** {info.get('cliente', '')} | **N. Ricevuta:** {info.get('numero', '')} | **Totale:** €{info.get('totale', 0):.2f}")
+        st.download_button(
+            label="📥 Scarica PDF Ricevuta",
+            data=st.session_state["vendita_completata_pdf"],
+            file_name=f"ricevuta_{info.get('numero', 'vendita')}.pdf",
+            mime="application/pdf",
+            use_container_width=True
+        )
+        if st.button("🆕 Nuova Vendita", use_container_width=True, type="primary"):
+            st.session_state["vendita_completata"] = False
+            st.session_state["vendita_completata_pdf"] = None
+            st.session_state["vendita_completata_info"] = None
+            st.rerun()
+        return
+
+    if "carrello_cassa" not in st.session_state:
+        st.session_state["carrello_cassa"] = []
+
+    # 1. Selezione acquirente (con possibilità di crearne uno nuovo inline)
+    dati_acquirente = _selettore_cliente_inline(URL_REST, HEADERS, "id_acquirente_corrente")
+    if dati_acquirente is None:
+        st.info("Seleziona o registra un cliente per iniziare la vendita.")
+        return
+
     st.session_state["id_acquirente_corrente"] = dati_acquirente["id"]
 
     if "id_libro_selezionato_cassa" not in st.session_state:
@@ -181,101 +352,6 @@ def mostra_pagina():
                     st.success(f"🎯 Trovata copia disponibile! ID Libro: **{id_libro_selezionato}**")
             else:
                 st.error(f"❌ Nessun libro trovato nel database per l'input: '{ricerca_cassa}'")
-        found_by_customer_code = False
-
-        # A. Cerca per codice personale del cliente/venditore
-        res_cli_exact = requests.get(f"{URL_REST}/clienti?codice_personale=eq.{ricerca_cassa}", headers=HEADERS)
-        cli_exact = res_cli_exact.json() if res_cli_exact.status_code == 200 else []
-
-        if not cli_exact and not ricerca_cassa.isdigit() and len(ricerca_cassa) >= 4:
-            res_cli_like = requests.get(f"{URL_REST}/clienti?codice_personale=ilike.*{ricerca_cassa}*", headers=HEADERS)
-            cli_exact = res_cli_like.json() if res_cli_like.status_code == 200 else []
-
-        found_copy = None
-
-        if cli_exact:
-            found_by_customer_code = True
-            id_v = cli_exact[0]['id']
-            cod_v = cli_exact[0]['codice_personale']
-            st.info(f"👤 Cliente trovato: **{cli_exact[0]['cognome']} {cli_exact[0]['nome']}** ({cod_v})")
-
-            res_libri_v = requests.get(f"{URL_REST}/copie_libri?id_venditore=eq.{id_v}", headers=HEADERS)
-            libri_v_list = res_libri_v.json() if res_libri_v.status_code == 200 else []
-
-            if libri_v_list:
-                res_cat_all = requests.get(f"{URL_REST}/catalogo_libri?select=isbn,titolo", headers=HEADERS)
-                df_cat_all = pd.DataFrame(res_cat_all.json()) if res_cat_all.status_code == 200 else pd.DataFrame()
-
-                mappa_libri_v = {}
-                for cp in libri_v_list:
-                    titolo_trovato = "Titolo Sconosciuto"
-                    if not df_cat_all.empty and cp.get('isbn') in df_cat_all['isbn'].values:
-                        titolo_trovato = df_cat_all[df_cat_all['isbn'] == cp['isbn']]['titolo'].values[0]
-
-                    st_norm = str(cp.get('stato', '')).lower()
-                    stato_display = "✅ Disponibile" if st_norm == 'disponibile' else f"❌ {cp.get('stato')}"
-                    label = f"ID: {cp.get('id_libro', cp.get('id'))} - {titolo_trovato} ({stato_display})"
-                    mappa_libri_v[label] = cp
-
-                scelta_cp = st.selectbox("Seleziona quale vendere:", list(mappa_libri_v.keys()), key="libro_vend_unico")
-                copia_sel = mappa_libri_v[scelta_cp]
-
-                if str(copia_sel.get('stato')).lower() != 'disponibile':
-                    st.warning(f"⚠️ Il libro selezionato non risulta disponibile (stato: {copia_sel.get('stato')}).")
-                else:
-                    id_libro_selezionato = copia_sel.get('id_libro') or copia_sel.get('id')
-                    st.session_state["id_libro_selezionato_cassa"] = id_libro_selezionato
-            else:
-                st.warning("❓ Questo venditore non ha libri registrati.")
-
-        # B. Ricerca diretta libro per "15-55", ID singolo o Barcode
-        if not found_by_customer_code:
-
-            # 1. Se c'è un trattino (es. "15-55")
-            if "-" in ricerca_cassa:
-                parti = [p.strip() for p in ricerca_cassa.split("-") if p.strip().isdigit()]
-                if len(parti) == 2:
-                    v_id, l_id = parti[0], parti[1]
-                    # Prova prima con il secondo numero come ID del libro
-                    res_p = requests.get(f"{URL_REST}/copie_libri?id_libro=eq.{l_id}", headers=HEADERS)
-                    copie = res_p.json() if res_p.status_code == 200 else []
-                    if not copie:
-                        # Altrimenti prova con il primo numero
-                        res_p = requests.get(f"{URL_REST}/copie_libri?id_libro=eq.{v_id}", headers=HEADERS)
-                        copie = res_p.json() if res_p.status_code == 200 else []
-                    
-                    if copie:
-                        found_copy = copie[0]
-
-            # 2. Cerca per ID libro diretto (es. "55")
-            if not found_copy:
-                m = re.search(r"\d+", ricerca_cassa)
-                token = m.group(0) if m else None
-                if token:
-                    res_by_id = requests.get(f"{URL_REST}/copie_libri?id_libro=eq.{token}", headers=HEADERS)
-                    if res_by_id.status_code == 200 and res_by_id.json():
-                        found_copy = res_by_id.json()[0]
-
-            # 3. Cerca nel campo `barcode`
-            if not found_copy:
-                try:
-                    res_by_bar = requests.get(f"{URL_REST}/copie_libri?barcode=eq.{ricerca_cassa}", headers=HEADERS)
-                    if res_by_bar.status_code == 200 and res_by_bar.json():
-                        found_copy = res_by_bar.json()[0]
-                except Exception:
-                    found_copy = None
-
-            # Esito finale
-            if found_copy:
-                st_copia = str(found_copy.get('stato', '')).lower()
-                if st_copia != 'disponibile':
-                    st.error(f"⚠️ Libro trovato (ID: {found_copy.get('id_libro')}), ma NON è disponibile! Stato attuale: **{found_copy.get('stato')}**")
-                else:
-                    id_libro_selezionato = found_copy.get('id_libro') or found_copy.get('id')
-                    st.session_state["id_libro_selezionato_cassa"] = id_libro_selezionato
-                    st.success(f"🎯 Trovata copia disponibile! ID Libro: **{id_libro_selezionato}**")
-            else:
-                st.error(f"❌ Nessun libro trovato nel database per: '{ricerca_cassa}'")
     # Inserimento nel carrello spesa
     if id_libro_selezionato is not None:
         gia_inserito = any(x['id_libro'] == id_libro_selezionato for x in st.session_state["carrello_cassa"])
@@ -289,7 +365,8 @@ def mostra_pagina():
                 copia = copie_res[0] if isinstance(copie_res, list) and len(copie_res) > 0 else copie_res
 
                 if copia['stato'] != 'disponibile':
-                    st.error("❌ Libro non disponibile.")
+                    # Non mostriamo errore perché già mostrato sopra
+                    pass
                 else:
                     res_d = requests.get(f"{URL_REST}/catalogo_libri?isbn=eq.{copia['isbn']}", headers=HEADERS)
                     d_list = res_d.json() if res_d.status_code == 200 else []
@@ -421,45 +498,60 @@ def mostra_pagina():
                     messaggio_errore = ""
                     data_oggi_fissa = format_date_for_db(datetime.date.today())
 
-                    for art in st.session_state["carrello_cassa"]:
-                        url_up = f"{URL_REST}/copie_libri?id_libro=eq.{art['id_libro']}"
-                        dati_aggiornamento_vendita = {
-                            "id_acquirente": dati_acquirente['id'],
-                            "stato": "venduto",
-                            "metodo_pagamento": metodo_paga,
-                            "data_vendita": data_oggi_fissa
-                        }
-                        res_v = requests.patch(url_up, headers=HEADERS, json=dati_aggiornamento_vendita)
-                        if res_v.status_code >= 400:
+                    # 1. PRIMA crea la ricevuta
+                    n_ricevuta = prossimo_numero_ricevuta("V")
+                    numero_ricevuta = f"{n_ricevuta}/V"
+                    try:
+                        res_ric = requests.post(
+                            f"{URL_REST}/ricevute",
+                            headers=HEADERS,
+                            json={
+                                "tipo": "V",
+                                "numero_progressivo": n_ricevuta,
+                                "data_ricevuta": data_oggi_fissa,
+                                "id_acquirente": dati_acquirente['id'],
+                                "metodo_pagamento": metodo_paga,
+                                "totale_libri": float(totale_spesa),
+                                "rimborso_spese": float(rimborso_totale),
+                                "totale_complessivo": float(totale_con_rimborso),
+                                "numero_articoli": len(st.session_state["carrello_cassa"]),
+                                "operatore": st.session_state.get("operatore", "Sconosciuto"),
+                            },
+                            timeout=15
+                        )
+                        if res_ric.status_code >= 400:
                             successo = False
-                            messaggio_errore = res_v.text or "Errore salvataggio."
-                            break
+                            messaggio_errore = f"Errore creazione ricevuta: {res_ric.text[:200]}"
+                    except Exception as e:
+                        successo = False
+                        messaggio_errore = f"Errore creazione ricevuta: {e}"
 
+                    # 2. POI aggiorna lo stato solo se la ricevuta è stata creata
                     if successo:
-                        n_ricevuta = prossimo_numero_ricevuta("V")
-                        numero_ricevuta = f"{n_ricevuta}/V"
-                        try:
-                            requests.post(
-                                f"{URL_REST}/ricevute",
-                                headers=HEADERS,
-                                json={
-                                    "tipo": "V",
-                                    "numero_progressivo": n_ricevuta,
-                                    "id_acquirente": dati_acquirente['id'],
-                                    "metodo_pagamento": metodo_paga,
-                                    "totale_libri": float(totale_spesa),
-                                    "rimborso_spese": float(rimborso_totale),
-                                    "totale_complessivo": float(totale_con_rimborso),
-                                    "numero_articoli": len(st.session_state["carrello_cassa"]),
-                                    "operatore": st.session_state.get("operatore", "Sconosciuto"),
-                                },
-                            )
-                        except Exception:
-                            pass
+                        for art in st.session_state["carrello_cassa"]:
+                            url_up = f"{URL_REST}/copie_libri?id_libro=eq.{art['id_libro']}"
+                            dati_aggiornamento_vendita = {
+                                "id_acquirente": dati_acquirente['id'],
+                                "stato": "venduto",
+                                "metodo_pagamento": metodo_paga,
+                                "data_vendita": data_oggi_fissa
+                            }
+                            res_v = requests.patch(url_up, headers=HEADERS, json=dati_aggiornamento_vendita, timeout=15)
+                            if res_v.status_code >= 400:
+                                successo = False
+                                messaggio_errore = res_v.text or "Errore aggiornamento stato."
+                                break
 
                         pdf_data = genera_pdf_vendita_multipla(dati_acquirente, st.session_state["carrello_cassa"], totale_spesa, metodo_paga, numero_ricevuta)
 
                         st.session_state["vendita_completata_pdf"] = pdf_data
+                        st.session_state["vendita_completata_info"] = {
+                            "cliente": f"{dati_acquirente.get('cognome', '')} {dati_acquirente.get('nome', '')}",
+                            "totale": totale_con_rimborso,
+                            "metodo": metodo_paga,
+                            "numero": numero_ricevuta,
+                            "data": data_oggi_fissa
+                        }
 
                         op_nome = st.session_state.get("operatore", "anon").lower()
                         pubblica_ricevuta_online(
@@ -468,10 +560,12 @@ def mostra_pagina():
                             "vendita",
                             dati_acquirente,
                             data_riferimento=data_oggi_fissa,
-                            suffisso=f"op-{op_nome}-{metodo_paga.lower().replace(' ', '-')}-{len(st.session_state['carrello_cassa'])}-articoli"
+                            suffisso=f"op-{op_nome}-{metodo_paga.lower().replace(' ', '-')}-{len(st.session_state['carrello_cassa'])}-articoli",
+                            numero_ricevuta=numero_ricevuta
                         )
                         st.session_state["carrello_cassa"] = []
                         st.cache_data.clear()
+                        st.session_state["vendita_completata"] = True
                         st.rerun()
                     else:
                         st.error(messaggio_errore or "Errore salvataggio.")
