@@ -19,6 +19,12 @@ from ricevute_condivise import (
 from gestore_etichette import genera_griglia_a4, stampa_etichette_tm_l90, genera_preview_etichette
 
 
+@st.cache_resource
+def get_global_fascicoli():
+    """Ritorna un dizionario condiviso in memoria tra tutte le sessioni/utenti."""
+    return {}
+
+
 # --- FUNZIONI CON CACHE PER VELOCIZZARE LE RICERCHE ---
 @st.cache_data(show_spinner=False, ttl=60)
 def _carica_clienti_ritiro():
@@ -399,49 +405,90 @@ def mostra_pagina():
             quantita = st.number_input("Quante copie di questo libro stai prendendo in carico?", min_value=1, value=1)
             
             # --- SEZIONE GESTIONE FASCICOLI ---
-            # "Ricorda la scelta": se lo stesso libro (ISBN) è già stato ritirato,
-            # pre-compiliamo i campi fascicoli con l'ultima scelta fatta.
             isbn_corrente = libro_selezionato_dati.get('isbn')
-            if "fascicoli_per_isbn" not in st.session_state:
-                st.session_state["fascicoli_per_isbn"] = {}
-            mem_fasc = st.session_state["fascicoli_per_isbn"].get(isbn_corrente, {})
+            
+            # Recupera memoria globale dei fascicoli condivisa tra tutte le sessioni/utenti
+            global_fasc = get_global_fascicoli()
+            mem_fasc = global_fasc.get(isbn_corrente, {})
 
             st.markdown("##### 📁 Gestione Fascicoli Allegati")
-            prevede_fascicoli = st.checkbox(
-                "Questo testo prevede dei fascicoli allegati?",
-                value=mem_fasc.get("prevede", False),
-                key=f"input_prevede_fascicoli_{isbn_corrente}",
-            )
-            totale_fascicoli = 0
-            fascicoli_consegnati = 0
-            if prevede_fascicoli:
-                col_f1, col_f2 = st.columns(2)
-                with col_f1:
-                    totale_fascicoli = st.number_input(
-                        "Numero totale di fascicoli previsti:",
-                        min_value=1,
-                        value=mem_fasc.get("totale", 1) or 1,
-                        step=1,
-                        key=f"input_totale_fascicoli_{isbn_corrente}",
-                    )
-                with col_f2:
+            
+            def _is_admin():
+                """True solo se l'operatore connesso e' admin (master o ruolo admin sulla tabella)."""
+                op = st.session_state.get("operatore", "")
+                if op == "admin":
+                    return True
+                try:
+                    import gestione_operatori as go
+                    for o in go.lista_operatori():
+                        if o.get("username") == op and o.get("ruolo") == "admin":
+                            return True
+                except Exception:
+                    pass
+                return False
+
+            is_admin_user = _is_admin()
+            
+            if is_admin_user:
+                prevede_fascicoli = st.checkbox(
+                    "Questo testo prevede dei fascicoli allegati? (Abilitato solo per Admin)",
+                    value=mem_fasc.get("prevede", False),
+                    key=f"input_prevede_fascicoli_{isbn_corrente}",
+                )
+                totale_fascicoli = 0
+                fascicoli_consegnati = 0
+                if prevede_fascicoli:
+                    col_f1, col_f2 = st.columns(2)
+                    with col_f1:
+                        totale_fascicoli = st.number_input(
+                            "Numero totale di fascicoli previsti:",
+                            min_value=1,
+                            value=mem_fasc.get("totale", 1) or 1,
+                            step=1,
+                            key=f"input_totale_fascicoli_{isbn_corrente}",
+                        )
+                    with col_f2:
+                        # L'utente/operatore inserisce solo i fascicoli portati al momento
+                        fascicoli_consegnati = st.number_input(
+                            "Numero di fascicoli CONSEGNATI al momento:",
+                            min_value=0,
+                            max_value=totale_fascicoli,
+                            value=0,
+                            step=1,
+                            key=f"input_fascicoli_consegnati_{isbn_corrente}",
+                        )
+                
+                # Salviamo sempre in memoria globale la definizione
+                global_fasc[isbn_corrente] = {
+                    "prevede": prevede_fascicoli,
+                    "totale": totale_fascicoli,
+                }
+            else:
+                # Per utenti non-admin, visualizziamo la scelta pre-inserita in sola lettura
+                prevede_fascicoli = mem_fasc.get("prevede", False)
+                totale_fascicoli = mem_fasc.get("totale", 0)
+                fascicoli_consegnati = 0
+                
+                if prevede_fascicoli:
+                    st.warning(f"📋 Questo testo prevede **{totale_fascicoli}** fascicoli allegati in totale (definito dall'Amministratore).")
                     fascicoli_consegnati = st.number_input(
-                        "Numero di fascicoli effettivamente CONSEGNATI:",
+                        "Numero di fascicoli CONSEGNATI al momento:",
                         min_value=0,
                         max_value=totale_fascicoli,
-                        value=min(mem_fasc.get("consegnati", totale_fascicoli) or totale_fascicoli, totale_fascicoli),
+                        value=0,
                         step=1,
                         key=f"input_fascicoli_consegnati_{isbn_corrente}",
                     )
+                else:
+                    st.info("ℹ️ Nessun fascicolo allegato previsto per questo testo dall'Amministratore.")
             
             if st.button("➕ INSERISCI QUESTO TITOLO NEL CARRELLO DI RITIRO", use_container_width=True):
-                # Salva la scelta fascicoli per "ricordarla" alla prossima volta sullo stesso
-                # ISBN (anche se ritirato da persone diverse nella stessa sessione di lavoro)
-                st.session_state["fascicoli_per_isbn"][isbn_corrente] = {
-                    "prevede": prevede_fascicoli,
-                    "totale": totale_fascicoli,
-                    "consegnati": fascicoli_consegnati,
-                }
+                # Salviamo sempre in memoria globale se admin
+                if is_admin_user:
+                    global_fasc[isbn_corrente] = {
+                        "prevede": prevede_fascicoli,
+                        "totale": totale_fascicoli,
+                    }
                 aggiorna_carrello_ritiro(
                     st.session_state["carrello_ritiro"],
                     {
